@@ -3,18 +3,15 @@ package main
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
+	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
-)
 
-type User struct {
-	ID    int64  `json:"id"`
-	Email string `json:"email"`
-	Name  string `json:"name"`
-}
+	"example.com/go-sql/internal/storage"
+)
 
 func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -35,70 +32,95 @@ func main() {
 	db.SetMaxIdleConns(5)
 	db.SetConnMaxIdleTime(30 * time.Second)
 
-	const schema = `CREATE TABLE IF NOT EXISTS users (
+	const schemaCourses = `CREATE TABLE IF NOT EXISTS courses (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		email VARCHAR(255) NOT NULL UNIQUE,
-		name VARCHAR(255)
+		slug TEXT NOT NULL UNIQUE,
+		title TEXT NOT NULL,
+		price INTEGER NOT NULL DEFAULT 0
 	)`
 
-	if _, err := db.ExecContext(ctx, schema); err != nil {
+	if _, err := db.ExecContext(ctx, schemaCourses); err != nil {
 		log.Fatalf("create table: %v", err)
 	}
+}
 
-	const insert = `INSERT INTO users (email, name) VALUES (?, ?) ON CONFLICT DO NOTHING;`
+func CreateCourse(ctx context.Context, db *sql.DB, c storage.Course) (int64, error) {
+	const query = `INSERT INTO courses (slug, title, price) VALUES (?, ?, ?) RETURNING id`
 
-	if _, err := db.ExecContext(ctx, insert, "rick@cartoon.com", "Rick"); err != nil {
-		log.Fatalf("insert: %v", err)
+	var id int64
+	if err := db.QueryRowContext(ctx, query, c.Slug, c.Title, c.Price).Scan(&id); err != nil {
+		return 0, fmt.Errorf("create course: %w", err)
+	}
+	return id, nil
+}
+
+var allowedOrder = map[string]string{
+	"price_asc":  "price ASC",
+	"price_desc": "price DESC",
+	"title_asc":  "title ASC",
+}
+
+func ListCourses(ctx context.Context, db *sql.DB, limit, offset int, order string) ([]storage.Course, error) {
+	ord, ok := allowedOrder[order]
+	if !ok {
+		ord = "id ASC"
 	}
 
-	if _, err := db.ExecContext(ctx, insert, "morty@cartoon.com", "Morty"); err != nil {
-		log.Fatalf("insert: %v", err)
-	}
+	query := `
+        SELECT id, slug, title, price
+        FROM courses
+        ORDER BY ` + ord + `
+        LIMIT ? OFFSET ?
+    `
 
-	if _, err := db.ExecContext(ctx, insert, "summer@cartoon.com", "Summer"); err != nil {
-		log.Fatalf("insert: %v", err)
-	}
-
-	if _, err := db.ExecContext(ctx, insert, "harry@movie.com", "Harry"); err != nil {
-		log.Fatalf("insert: %v", err)
-	}
-
-	if _, err := db.ExecContext(ctx, insert, "hermione@movie.com", "Hermione"); err != nil {
-		log.Fatalf("insert: %v", err)
-	}
-
-	const update = `UPDATE users SET name = ? WHERE email = ?`
-	if _, err := db.ExecContext(ctx, update, "Morty Smith", "morty@cartoon.com"); err != nil {
-		log.Fatalf("update: %v", err)
-	}
-
-	var u User
-	err = db.QueryRowContext(ctx,
-		`SELECT id, email, name FROM users WHERE email = ?`,
-		"rick@cartoon.com",
-	).Scan(&u.ID, &u.Email, &u.Name)
+	rows, err := db.QueryContext(ctx, query, limit, offset)
 	if err != nil {
-		log.Fatalf("query: %v", err)
-	}
-
-	var characters []User
-	rows, err := db.QueryContext(ctx, `SELECT id, email, name FROM users ORDER BY name`)
-	if err != nil {
-		log.Fatalf("query: %v", err)
+		return nil, fmt.Errorf("list courses: %w", err)
 	}
 	defer rows.Close()
 
+	var courses []storage.Course
 	for rows.Next() {
-		var u User
-		if err := rows.Scan(&u.ID, &u.Email, &u.Name); err != nil {
-			log.Fatalf("scan: %v", err)
+		var c storage.Course
+		if err := rows.Scan(&c.ID, &c.Slug, &c.Title, &c.Price); err != nil {
+			return nil, fmt.Errorf("scan course: %w", err)
 		}
-		characters = append(characters, u)
+		courses = append(courses, c)
+	}
+	return courses, rows.Err()
+}
+
+func FindCoursesByIDs(ctx context.Context, db *sql.DB, ids []int64) ([]storage.Course, error) {
+	if len(ids) == 0 {
+		return []storage.Course{}, nil
 	}
 
-	payload, _ := json.MarshalIndent(u, "", "  ")
-	log.Printf("loaded user: %s", payload)
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(ids)), ",")
 
-	charactersPayload, _ := json.MarshalIndent(characters, "", "  ")
-	log.Printf("loaded users: %s", charactersPayload)
+	args := make([]interface{}, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+
+	query := `
+		SELECT id, slug, title, price
+		FROM courses
+		WHERE id IN (` + placeholders + `)
+	`
+
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("find courses: %w", err)
+	}
+	defer rows.Close()
+
+	var courses []storage.Course
+	for rows.Next() {
+		var c storage.Course
+		if err := rows.Scan(&c.ID, &c.Slug, &c.Title, &c.Price); err != nil {
+			return nil, fmt.Errorf("scan course: %w", err)
+		}
+		courses = append(courses, c)
+	}
+	return courses, rows.Err()
 }
