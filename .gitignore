@@ -32,7 +32,7 @@ go.work.sum
 .vscode/
 
 # Databases
-.db
+*.db
 
 # MacOS hidden files
 .DS_Store
