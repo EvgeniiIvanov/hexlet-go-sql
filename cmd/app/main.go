@@ -2,103 +2,165 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
+	"fmt"
 	"log"
 	"time"
 
-	_ "modernc.org/sqlite"
+	"github.com/alecthomas/kong"
+
+	"example.com/go-sql/internal/database"
+	"example.com/go-sql/internal/storage"
 )
 
-type User struct {
-	ID    int64  `json:"id"`
-	Email string `json:"email"`
-	Name  string `json:"name"`
+var CLI struct {
+	DBPath string `help:"Path to SQLite database" default:"data.db"`
+
+	CourseAdd  CourseAddCmd  `cmd:"" help:"Add a new course"`
+	CourseList CourseListCmd `cmd:"" help:"List courses"`
+	CourseFind CourseFindCmd `cmd:"" help:"Find courses by IDs"`
+
+	UserAdd  UserAddCmd  `cmd:"" help:"Add a new user"`
+	UserList UserListCmd `cmd:"" help:"List all users"`
+	UserGet  UserGetCmd  `cmd:"" help:"Get user by ID"`
+}
+
+type CourseAddCmd struct {
+	Slug  string `short:"s" help:"Course slug (unique identifier)" required:""`
+	Title string `short:"t" help:"Course title" required:""`
+	Price int    `short:"p" help:"Course price in USD" default:"0"`
+}
+
+func (cmd *CourseAddCmd) Run(ctx context.Context, repo *storage.CourseRepository) error {
+	dto := storage.CreateCourseDTO{
+		Slug:  cmd.Slug,
+		Title: cmd.Title,
+		Price: cmd.Price,
+	}
+
+	course, err := repo.Create(ctx, dto)
+	if err != nil {
+		return fmt.Errorf("create course: %w", err)
+	}
+
+	return printJSON(course)
+}
+
+type CourseListCmd struct {
+	Limit  int    `short:"l" help:"Number of courses to return" default:"10"`
+	Offset int    `short:"o" help:"Offset for pagination" default:"0"`
+	Order  string `short:"r" help:"Order by field (id, slug, title, price)" default:"id" enum:"id,slug,title,price"`
+}
+
+func (cmd *CourseListCmd) Run(ctx context.Context, repo *storage.CourseRepository) error {
+	courses, err := repo.List(ctx, cmd.Limit, cmd.Offset, cmd.Order)
+	if err != nil {
+		return fmt.Errorf("list courses: %w", err)
+	}
+
+	return printJSON(courses)
+}
+
+type CourseFindCmd struct {
+	IDs []int64 `arg:"" name:"ids" help:"Course IDs to find" required:""`
+}
+
+func (cmd *CourseFindCmd) Run(ctx context.Context, repo *storage.CourseRepository) error {
+	courses, err := repo.FindByIDs(ctx, cmd.IDs)
+	if err != nil {
+		return fmt.Errorf("find courses: %w", err)
+	}
+
+	return printJSON(courses)
+}
+
+// User commands
+
+type UserAddCmd struct {
+	Email string  `short:"e" help:"User email (required)" required:""`
+	Name  *string `short:"n" help:"User name (optional)"`
+	Age   *int    `short:"a" help:"User age (optional)"`
+}
+
+func (cmd *UserAddCmd) Run(ctx context.Context, repo *storage.UserRepository) error {
+	dto := storage.CreateUserDTO{
+		Email: cmd.Email,
+		Name:  cmd.Name,
+		Age:   cmd.Age,
+	}
+
+	user, err := repo.Create(ctx, dto)
+	if err != nil {
+		return fmt.Errorf("create user: %w", err)
+	}
+
+	return printJSON(user)
+}
+
+type UserListCmd struct{}
+
+func (cmd *UserListCmd) Run(ctx context.Context, repo *storage.UserRepository) error {
+	users, err := repo.List(ctx)
+	if err != nil {
+		return fmt.Errorf("list users: %w", err)
+	}
+
+	return printJSON(users)
+}
+
+type UserGetCmd struct {
+	ID int64 `arg:"" help:"User ID to retrieve" required:""`
+}
+
+func (cmd *UserGetCmd) Run(ctx context.Context, repo *storage.UserRepository) error {
+	user, err := repo.Get(ctx, cmd.ID)
+	if err != nil {
+		return fmt.Errorf("get user: %w", err)
+	}
+
+	return printJSON(user)
+}
+
+// Helper functions
+
+func printJSON(v interface{}) error {
+	data, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal json: %w", err)
+	}
+	fmt.Println(string(data))
+	return nil
 }
 
 func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	db, err := sql.Open("sqlite", "file:data.db?_foreign_keys=on&_busy_timeout=5000")
+	// Connect to database
+	db, err := database.Connect(ctx, database.DefaultConfig())
 	if err != nil {
-		log.Fatalf("open db: %v", err)
+		log.Fatalf("database connection failed: %v", err)
 	}
 	defer db.Close()
 
-	if err := db.PingContext(ctx); err != nil {
-		log.Fatalf("ping db: %v", err)
+	// Initialize schema
+	if err := database.InitSchema(ctx, db); err != nil {
+		log.Fatalf("schema initialization failed: %v", err)
 	}
 
-	// Define pool settings
-	db.SetMaxOpenConns(10)
-	db.SetMaxIdleConns(5)
-	db.SetConnMaxIdleTime(30 * time.Second)
+	// Create repositories
+	courseRepo := storage.NewCourseRepository(db)
+	userRepo := storage.NewUserRepository(db)
 
-	const schema = `CREATE TABLE IF NOT EXISTS users (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		email VARCHAR(255) NOT NULL UNIQUE,
-		name VARCHAR(255)
-	)`
+	kongCtx := kong.Parse(&CLI,
+		kong.Name("gosql"),
+		kong.Description("A CLI tool for managing SQLite databases"),
+		kong.BindTo(ctx, (*context.Context)(nil)),
+		kong.Bind(courseRepo),
+		kong.Bind(userRepo),
+	)
 
-	if _, err := db.ExecContext(ctx, schema); err != nil {
-		log.Fatalf("create table: %v", err)
+	if err := kongCtx.Run(); err != nil {
+		log.Fatalf("run command: %v", err)
 	}
-
-	const insert = `INSERT INTO users (email, name) VALUES (?, ?) ON CONFLICT DO NOTHING;`
-
-	if _, err := db.ExecContext(ctx, insert, "rick@cartoon.com", "Rick"); err != nil {
-		log.Fatalf("insert: %v", err)
-	}
-
-	if _, err := db.ExecContext(ctx, insert, "morty@cartoon.com", "Morty"); err != nil {
-		log.Fatalf("insert: %v", err)
-	}
-
-	if _, err := db.ExecContext(ctx, insert, "summer@cartoon.com", "Summer"); err != nil {
-		log.Fatalf("insert: %v", err)
-	}
-
-	if _, err := db.ExecContext(ctx, insert, "harry@movie.com", "Harry"); err != nil {
-		log.Fatalf("insert: %v", err)
-	}
-
-	if _, err := db.ExecContext(ctx, insert, "hermione@movie.com", "Hermione"); err != nil {
-		log.Fatalf("insert: %v", err)
-	}
-
-	const update = `UPDATE users SET name = ? WHERE email = ?`
-	if _, err := db.ExecContext(ctx, update, "Morty Smith", "morty@cartoon.com"); err != nil {
-		log.Fatalf("update: %v", err)
-	}
-
-	var u User
-	err = db.QueryRowContext(ctx,
-		`SELECT id, email, name FROM users WHERE email = ?`,
-		"rick@cartoon.com",
-	).Scan(&u.ID, &u.Email, &u.Name)
-	if err != nil {
-		log.Fatalf("query: %v", err)
-	}
-
-	var characters []User
-	rows, err := db.QueryContext(ctx, `SELECT id, email, name FROM users ORDER BY name`)
-	if err != nil {
-		log.Fatalf("query: %v", err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var u User
-		if err := rows.Scan(&u.ID, &u.Email, &u.Name); err != nil {
-			log.Fatalf("scan: %v", err)
-		}
-		characters = append(characters, u)
-	}
-
-	payload, _ := json.MarshalIndent(u, "", "  ")
-	log.Printf("loaded user: %s", payload)
-
-	charactersPayload, _ := json.MarshalIndent(characters, "", "  ")
-	log.Printf("loaded users: %s", charactersPayload)
 }
