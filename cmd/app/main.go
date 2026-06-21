@@ -2,15 +2,14 @@ package main
 
 import (
 	"context"
-	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
-	"strings"
 	"time"
 
 	"github.com/alecthomas/kong"
-	_ "modernc.org/sqlite"
 
+	"example.com/go-sql/internal/database"
 	"example.com/go-sql/internal/storage"
 )
 
@@ -20,6 +19,10 @@ var CLI struct {
 	CourseAdd  CourseAddCmd  `cmd:"" help:"Add a new course"`
 	CourseList CourseListCmd `cmd:"" help:"List courses"`
 	CourseFind CourseFindCmd `cmd:"" help:"Find courses by IDs"`
+
+	UserAdd  UserAddCmd  `cmd:"" help:"Add a new user"`
+	UserList UserListCmd `cmd:"" help:"List all users"`
+	UserGet  UserGetCmd  `cmd:"" help:"Get user by ID"`
 }
 
 type CourseAddCmd struct {
@@ -28,20 +31,19 @@ type CourseAddCmd struct {
 	Price int    `short:"p" help:"Course price in USD" default:"0"`
 }
 
-func (cmd *CourseAddCmd) Run(ctx context.Context, db *sql.DB) error {
-	course := storage.Course{
+func (cmd *CourseAddCmd) Run(ctx context.Context, repo *storage.CourseRepository) error {
+	dto := storage.CreateCourseDTO{
 		Slug:  cmd.Slug,
 		Title: cmd.Title,
 		Price: cmd.Price,
 	}
 
-	id, err := CreateCourse(ctx, db, course)
+	course, err := repo.Create(ctx, dto)
 	if err != nil {
 		return fmt.Errorf("create course: %w", err)
 	}
 
-	fmt.Printf("Course created successfully! ID: %d\n", id)
-	return nil
+	return printJSON(course)
 }
 
 type CourseListCmd struct {
@@ -50,164 +52,112 @@ type CourseListCmd struct {
 	Order  string `short:"r" help:"Order by field (id, slug, title, price)" default:"id" enum:"id,slug,title,price"`
 }
 
-func (cmd *CourseListCmd) Run(ctx context.Context, db *sql.DB) error {
-	courses, err := ListCourses(ctx, db, cmd.Limit, cmd.Offset, cmd.Order)
+func (cmd *CourseListCmd) Run(ctx context.Context, repo *storage.CourseRepository) error {
+	courses, err := repo.List(ctx, cmd.Limit, cmd.Offset, cmd.Order)
 	if err != nil {
 		return fmt.Errorf("list courses: %w", err)
 	}
 
-	if len(courses) == 0 {
-		fmt.Println("No courses found")
-		return nil
-	}
-
-	fmt.Printf("Found %d courses:\n\n", len(courses))
-	for _, c := range courses {
-		fmt.Printf("  ID: %d | Slug: %s | Title: %s | Price: $%d\n",
-			c.ID, c.Slug, c.Title, c.Price)
-	}
-	return nil
+	return printJSON(courses)
 }
 
 type CourseFindCmd struct {
 	IDs []int64 `arg:"" name:"ids" help:"Course IDs to find" required:""`
 }
 
-func (cmd *CourseFindCmd) Run(ctx context.Context, db *sql.DB) error {
-	courses, err := FindCoursesByIDs(ctx, db, cmd.IDs)
+func (cmd *CourseFindCmd) Run(ctx context.Context, repo *storage.CourseRepository) error {
+	courses, err := repo.FindByIDs(ctx, cmd.IDs)
 	if err != nil {
 		return fmt.Errorf("find courses: %w", err)
 	}
 
-	if len(courses) == 0 {
-		fmt.Println("No courses found for given IDs")
-		return nil
+	return printJSON(courses)
+}
+
+// User commands
+
+type UserAddCmd struct {
+	Email string  `short:"e" help:"User email (required)" required:""`
+	Name  *string `short:"n" help:"User name (optional)"`
+	Age   *int    `short:"a" help:"User age (optional)"`
+}
+
+func (cmd *UserAddCmd) Run(ctx context.Context, repo *storage.UserRepository) error {
+	dto := storage.CreateUserDTO{
+		Email: cmd.Email,
+		Name:  cmd.Name,
+		Age:   cmd.Age,
 	}
 
-	fmt.Printf("Found %d courses:\n\n", len(courses))
-	for _, c := range courses {
-		fmt.Printf("  ID: %d | Slug: %s | Title: %s | Price: $%d\n",
-			c.ID, c.Slug, c.Title, c.Price)
+	user, err := repo.Create(ctx, dto)
+	if err != nil {
+		return fmt.Errorf("create user: %w", err)
 	}
+
+	return printJSON(user)
+}
+
+type UserListCmd struct{}
+
+func (cmd *UserListCmd) Run(ctx context.Context, repo *storage.UserRepository) error {
+	users, err := repo.List(ctx)
+	if err != nil {
+		return fmt.Errorf("list users: %w", err)
+	}
+
+	return printJSON(users)
+}
+
+type UserGetCmd struct {
+	ID int64 `arg:"" help:"User ID to retrieve" required:""`
+}
+
+func (cmd *UserGetCmd) Run(ctx context.Context, repo *storage.UserRepository) error {
+	user, err := repo.Get(ctx, cmd.ID)
+	if err != nil {
+		return fmt.Errorf("get user: %w", err)
+	}
+
+	return printJSON(user)
+}
+
+// Helper functions
+
+func printJSON(v interface{}) error {
+	data, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal json: %w", err)
+	}
+	fmt.Println(string(data))
 	return nil
-}
-
-func CreateCourse(ctx context.Context, db *sql.DB, c storage.Course) (int64, error) {
-	const query = `INSERT INTO courses (slug, title, price) VALUES (?, ?, ?) RETURNING id`
-
-	var id int64
-	if err := db.QueryRowContext(ctx, query, c.Slug, c.Title, c.Price).Scan(&id); err != nil {
-		return 0, fmt.Errorf("create course: %w", err)
-	}
-	return id, nil
-}
-
-var allowedOrder = map[string]string{
-	"price_asc":  "price ASC",
-	"price_desc": "price DESC",
-	"title_asc":  "title ASC",
-}
-
-func ListCourses(ctx context.Context, db *sql.DB, limit, offset int, order string) ([]storage.Course, error) {
-	ord, ok := allowedOrder[order]
-	if !ok {
-		ord = "id ASC"
-	}
-
-	query := `
-        SELECT id, slug, title, price
-        FROM courses
-        ORDER BY ` + ord + `
-        LIMIT ? OFFSET ?
-    `
-
-	rows, err := db.QueryContext(ctx, query, limit, offset)
-	if err != nil {
-		return nil, fmt.Errorf("list courses: %w", err)
-	}
-	defer rows.Close()
-
-	var courses []storage.Course
-	for rows.Next() {
-		var c storage.Course
-		if err := rows.Scan(&c.ID, &c.Slug, &c.Title, &c.Price); err != nil {
-			return nil, fmt.Errorf("scan course: %w", err)
-		}
-		courses = append(courses, c)
-	}
-	return courses, rows.Err()
-}
-
-func FindCoursesByIDs(ctx context.Context, db *sql.DB, ids []int64) ([]storage.Course, error) {
-	if len(ids) == 0 {
-		return []storage.Course{}, nil
-	}
-
-	placeholders := strings.TrimRight(strings.Repeat("?,", len(ids)), ",")
-
-	args := make([]interface{}, len(ids))
-	for i, id := range ids {
-		args[i] = id
-	}
-
-	query := `
-		SELECT id, slug, title, price
-		FROM courses
-		WHERE id IN (` + placeholders + `)
-	`
-
-	rows, err := db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("find courses: %w", err)
-	}
-	defer rows.Close()
-
-	var courses []storage.Course
-	for rows.Next() {
-		var c storage.Course
-		if err := rows.Scan(&c.ID, &c.Slug, &c.Title, &c.Price); err != nil {
-			return nil, fmt.Errorf("scan course: %w", err)
-		}
-		courses = append(courses, c)
-	}
-	return courses, rows.Err()
 }
 
 func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	db, err := sql.Open("sqlite", "file:data.db?_foreign_keys=on&_busy_timeout=5000")
+	// Connect to database
+	db, err := database.Connect(ctx, database.DefaultConfig())
 	if err != nil {
-		log.Fatalf("open db: %v", err)
+		log.Fatalf("database connection failed: %v", err)
 	}
 	defer db.Close()
 
-	if err := db.PingContext(ctx); err != nil {
-		log.Fatalf("ping db: %v", err)
+	// Initialize schema
+	if err := database.InitSchema(ctx, db); err != nil {
+		log.Fatalf("schema initialization failed: %v", err)
 	}
 
-	// Define pool settings
-	db.SetMaxOpenConns(10)
-	db.SetMaxIdleConns(5)
-	db.SetConnMaxIdleTime(30 * time.Second)
-
-	const schemaCourses = `CREATE TABLE IF NOT EXISTS courses (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		slug TEXT NOT NULL UNIQUE,
-		title TEXT NOT NULL,
-		price INTEGER NOT NULL DEFAULT 0
-	)`
-
-	if _, err := db.ExecContext(ctx, schemaCourses); err != nil {
-		log.Fatalf("create table: %v", err)
-	}
+	// Create repositories
+	courseRepo := storage.NewCourseRepository(db)
+	userRepo := storage.NewUserRepository(db)
 
 	kongCtx := kong.Parse(&CLI,
 		kong.Name("gosql"),
-		kong.Description("A CLI tool for managing SQLite database of courses"),
+		kong.Description("A CLI tool for managing SQLite databases"),
 		kong.BindTo(ctx, (*context.Context)(nil)),
-		kong.Bind(db),
+		kong.Bind(courseRepo),
+		kong.Bind(userRepo),
 	)
 
 	if err := kongCtx.Run(); err != nil {
