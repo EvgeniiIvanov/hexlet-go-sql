@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"os"
 	"time"
 
 	"github.com/alecthomas/kong"
@@ -16,13 +18,15 @@ import (
 var CLI struct {
 	DBPath string `help:"Path to SQLite database" default:"data.db"`
 
-	CourseAdd  CourseAddCmd  `cmd:"" help:"Add a new course"`
-	CourseList CourseListCmd `cmd:"" help:"List courses"`
-	CourseFind CourseFindCmd `cmd:"" help:"Find courses by IDs"`
+	CourseAdd        CourseAddCmd        `cmd:"" help:"Add a new course"`
+	CourseList       CourseListCmd       `cmd:"" help:"List courses"`
+	CourseFind       CourseFindCmd       `cmd:"" help:"Find courses by IDs"`
+	CourseBulkUpsert CourseBulkUpsertCmd `cmd:"" help:"Bulk upsert courses from JSON file or stdin"`
 
-	UserAdd  UserAddCmd  `cmd:"" help:"Add a new user"`
-	UserList UserListCmd `cmd:"" help:"List all users"`
-	UserGet  UserGetCmd  `cmd:"" help:"Get user by ID"`
+	UserAdd        UserAddCmd        `cmd:"" help:"Add a new user"`
+	UserList       UserListCmd       `cmd:"" help:"List all users"`
+	UserGet        UserGetCmd        `cmd:"" help:"Get user by ID"`
+	UserBulkUpsert UserBulkUpsertCmd `cmd:"" help:"Bulk upsert users from JSON file or stdin"`
 }
 
 type CourseAddCmd struct {
@@ -74,6 +78,56 @@ func (cmd *CourseFindCmd) Run(ctx context.Context, repo *storage.CourseRepositor
 	return printJSON(courses)
 }
 
+type CourseBulkUpsertCmd struct {
+	File string `short:"f" help:"JSON file with courses array (use '-' for stdin)" default:"-"`
+}
+
+func (cmd *CourseBulkUpsertCmd) Run(ctx context.Context, repo *storage.CourseRepository) error {
+	start := time.Now()
+
+	var dtos []storage.CreateCourseDTO
+
+	// Read from file or stdin
+	var data []byte
+	var err error
+
+	if cmd.File == "-" {
+		data, err = io.ReadAll(os.Stdin)
+		if err != nil {
+			return fmt.Errorf("read stdin: %w", err)
+		}
+	} else {
+		data, err = os.ReadFile(cmd.File)
+		if err != nil {
+			return fmt.Errorf("read file: %w", err)
+		}
+	}
+
+	// Parse JSON
+	if err := json.Unmarshal(data, &dtos); err != nil {
+		return fmt.Errorf("parse json: %w", err)
+	}
+
+	// Perform bulk upsert
+	operationStart := time.Now()
+	if err := repo.BulkUpsert(ctx, dtos); err != nil {
+		return fmt.Errorf("bulk upsert: %w", err)
+	}
+	operationDuration := time.Since(operationStart)
+
+	// Return success message with timing
+	result := map[string]interface{}{
+		"success":        true,
+		"count":          len(dtos),
+		"message":        fmt.Sprintf("Successfully upserted %d courses", len(dtos)),
+		"operation_time": operationDuration.String(),
+		"total_time":     time.Since(start).String(),
+		"avg_per_record": (operationDuration / time.Duration(len(dtos))).String(),
+	}
+
+	return printJSON(result)
+}
+
 // User commands
 
 type UserAddCmd struct {
@@ -119,6 +173,58 @@ func (cmd *UserGetCmd) Run(ctx context.Context, repo *storage.UserRepository) er
 	}
 
 	return printJSON(user)
+}
+
+type UserBulkUpsertCmd struct {
+	File string `short:"f" help:"JSON file with users array (use '-' for stdin)" default:"-"`
+}
+
+func (cmd *UserBulkUpsertCmd) Run(ctx context.Context, repo *storage.UserRepository) error {
+	start := time.Now()
+
+	var dtos []storage.CreateUserDTO
+
+	// Read from file or stdin
+	var data []byte
+	var err error
+
+	if cmd.File == "-" {
+		// Read from stdin
+		data, err = io.ReadAll(os.Stdin)
+		if err != nil {
+			return fmt.Errorf("read stdin: %w", err)
+		}
+	} else {
+		// Read from file
+		data, err = os.ReadFile(cmd.File)
+		if err != nil {
+			return fmt.Errorf("read file: %w", err)
+		}
+	}
+
+	// Parse JSON
+	if err := json.Unmarshal(data, &dtos); err != nil {
+		return fmt.Errorf("parse json: %w", err)
+	}
+
+	// Perform bulk upsert
+	operationStart := time.Now()
+	if err := repo.BulkUpsert(ctx, dtos); err != nil {
+		return fmt.Errorf("bulk upsert: %w", err)
+	}
+	operationDuration := time.Since(operationStart)
+
+	// Return success message with timing
+	result := map[string]interface{}{
+		"success":        true,
+		"count":          len(dtos),
+		"message":        fmt.Sprintf("Successfully upserted %d users", len(dtos)),
+		"operation_time": operationDuration.String(),
+		"total_time":     time.Since(start).String(),
+		"avg_per_record": (operationDuration / time.Duration(len(dtos))).String(),
+	}
+
+	return printJSON(result)
 }
 
 // Helper functions

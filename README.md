@@ -9,6 +9,8 @@ A command-line interface for managing SQLite databases with support for courses 
 - **Nullable Fields**: Proper handling of optional database fields
 - **Type Safety**: Strong typing with Go structs
 - **Kong CLI**: Modern command-line parsing with auto-generated help
+- **Prepared Statements**: Bulk operations using prepared statements for performance
+- **Upsert Support**: Insert or update (ON CONFLICT) for both courses and users
 
 ## Installation
 
@@ -36,6 +38,16 @@ make build
 ./bin/gosql course-find 1 2 3
 ```
 
+**Bulk Upsert Courses from JSON file:**
+```bash
+./bin/gosql course-bulk-upsert -f examples/courses.json
+```
+
+**Bulk Upsert Courses from stdin:**
+```bash
+echo '[{"slug":"go","title":"Go Course","price":100}]' | ./bin/gosql course-bulk-upsert
+```
+
 ### User Commands
 
 **Add a User (with all fields):**
@@ -57,6 +69,46 @@ Note: `name` and `age` are omitted from JSON output when NULL.
 **Get User by ID:**
 ```bash
 ./bin/gosql user-get 1
+```
+
+**Bulk Upsert Users from JSON file:**
+```bash
+./bin/gosql user-bulk-upsert -f examples/users.json
+```
+
+**Bulk Upsert Users from stdin:**
+```bash
+echo '[{"email":"user@example.com","name":"John","age":30}]' | ./bin/gosql user-bulk-upsert
+```
+
+## Performance Demo
+
+Run the bash script to see prepared statements in action:
+```bash
+./examples/bulk_performance_demo.sh
+```
+
+This demonstrates:
+- Bulk insert of 100 users
+- Bulk update of 50 existing users
+- Bulk insert of 20 courses
+- Mixed upsert operations
+
+Each operation shows timing metrics including:
+- `operation_time` - Time spent in database operations
+- `total_time` - Total command execution time
+- `avg_per_record` - Average time per record
+
+Example output:
+```json
+{
+  "avg_per_record": "649.82µs",
+  "count": 100,
+  "message": "Successfully upserted 100 users",
+  "operation_time": "64.982ms",
+  "success": true,
+  "total_time": "65.097292ms"
+}
 ```
 
 ## Example JSON Output
