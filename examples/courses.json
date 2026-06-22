@@ -1,0 +1,22 @@
+[
+  {
+    "slug": "go-basics",
+    "title": "Go Programming Basics",
+    "price": 100
+  },
+  {
+    "slug": "python-advanced",
+    "title": "Advanced Python Programming",
+    "price": 250
+  },
+  {
+    "slug": "rust-intro",
+    "title": "Introduction to Rust",
+    "price": 150
+  },
+  {
+    "slug": "javascript-fullstack",
+    "title": "Full Stack JavaScript",
+    "price": 300
+  }
+]

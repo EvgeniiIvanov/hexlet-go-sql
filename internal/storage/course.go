@@ -204,3 +204,61 @@ func (r *CourseRepository) Delete(ctx context.Context, id int64) error {
 
 	return nil
 }
+
+// BulkUpsert inserts or updates multiple courses using prepared statements
+// If a course with the same slug exists, updates title and price
+func (r *CourseRepository) BulkUpsert(ctx context.Context, dtos []CreateCourseDTO) error {
+	if len(dtos) == 0 {
+		return nil
+	}
+
+	stmt, err := r.db.PrepareContext(ctx, `
+		INSERT INTO courses(slug, title, price)
+		VALUES(?, ?, ?)
+		ON CONFLICT(slug) DO UPDATE SET
+			title = excluded.title,
+			price = excluded.price
+	`)
+	if err != nil {
+		return fmt.Errorf("prepare bulk upsert: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, dto := range dtos {
+		if _, err := stmt.ExecContext(ctx, dto.Slug, dto.Title, dto.Price); err != nil {
+			return fmt.Errorf("upsert course %s: %w", dto.Slug, err)
+		}
+	}
+
+	return nil
+}
+
+// BulkCreate inserts multiple courses using prepared statements
+func (r *CourseRepository) BulkCreate(ctx context.Context, dtos []CreateCourseDTO) ([]Course, error) {
+	if len(dtos) == 0 {
+		return []Course{}, nil
+	}
+
+	stmt, err := r.db.PrepareContext(ctx, `
+		INSERT INTO courses(slug, title, price)
+		VALUES(?, ?, ?)
+		RETURNING id, slug, title, price
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("prepare bulk create: %w", err)
+	}
+	defer stmt.Close()
+
+	courses := make([]Course, 0, len(dtos))
+	for _, dto := range dtos {
+		var course Course
+		err := stmt.QueryRowContext(ctx, dto.Slug, dto.Title, dto.Price).
+			Scan(&course.ID, &course.Slug, &course.Title, &course.Price)
+		if err != nil {
+			return nil, fmt.Errorf("create course %s: %w", dto.Slug, err)
+		}
+		courses = append(courses, course)
+	}
+
+	return courses, nil
+}

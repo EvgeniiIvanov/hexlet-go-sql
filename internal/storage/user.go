@@ -157,3 +157,86 @@ func (r *UserRepository) FindByEmail(ctx context.Context, email string) (*User, 
 
 	return &user, nil
 }
+
+// BulkUpsert inserts or updates multiple users using prepared statements
+// If a user with the same email exists, updates name and age
+func (r *UserRepository) BulkUpsert(ctx context.Context, dtos []CreateUserDTO) error {
+	if len(dtos) == 0 {
+		return nil
+	}
+
+	stmt, err := r.db.PrepareContext(ctx, `
+		INSERT INTO users(email, name, age)
+		VALUES(?, ?, ?)
+		ON CONFLICT(email) DO UPDATE SET
+			name = excluded.name,
+			age = excluded.age
+	`)
+	if err != nil {
+		return fmt.Errorf("prepare bulk upsert: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, dto := range dtos {
+		if _, err := stmt.ExecContext(ctx, dto.Email, dto.Name, dto.Age); err != nil {
+			return fmt.Errorf("upsert user %s: %w", dto.Email, err)
+		}
+	}
+
+	return nil
+}
+
+// BulkCreate inserts multiple users using prepared statements
+func (r *UserRepository) BulkCreate(ctx context.Context, dtos []CreateUserDTO) ([]User, error) {
+	if len(dtos) == 0 {
+		return []User{}, nil
+	}
+
+	stmt, err := r.db.PrepareContext(ctx, `
+		INSERT INTO users(email, name, age)
+		VALUES(?, ?, ?)
+		RETURNING id, email, name, age, created_at
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("prepare bulk create: %w", err)
+	}
+	defer stmt.Close()
+
+	users := make([]User, 0, len(dtos))
+	for _, dto := range dtos {
+		var user User
+		err := stmt.QueryRowContext(ctx, dto.Email, dto.Name, dto.Age).
+			Scan(&user.ID, &user.Email, &user.Name, &user.Age, &user.CreatedAt)
+		if err != nil {
+			return nil, fmt.Errorf("create user %s: %w", dto.Email, err)
+		}
+		users = append(users, user)
+	}
+
+	return users, nil
+}
+
+// BulkDelete deletes multiple users by IDs using prepared statements
+func (r *UserRepository) BulkDelete(ctx context.Context, ids []int64) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	stmt, err := r.db.PrepareContext(ctx, `DELETE FROM users WHERE id = ?`)
+	if err != nil {
+		return 0, fmt.Errorf("prepare bulk delete: %w", err)
+	}
+	defer stmt.Close()
+
+	var totalDeleted int64
+	for _, id := range ids {
+		result, err := stmt.ExecContext(ctx, id)
+		if err != nil {
+			return totalDeleted, fmt.Errorf("delete user %d: %w", id, err)
+		}
+		rows, _ := result.RowsAffected()
+		totalDeleted += rows
+	}
+
+	return totalDeleted, nil
+}
