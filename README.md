@@ -11,6 +11,7 @@ A command-line interface for managing SQLite databases with support for courses 
 - **Kong CLI**: Modern command-line parsing with auto-generated help
 - **Prepared Statements**: Bulk operations using prepared statements for performance
 - **Upsert Support**: Insert or update (ON CONFLICT) for both courses and users
+- **Transactions**: Atomic operations with rollback support for data integrity
 
 ## Installation
 
@@ -81,6 +82,67 @@ Note: `name` and `age` are omitted from JSON output when NULL.
 echo '[{"email":"user@example.com","name":"John","age":30}]' | ./bin/gosql user-bulk-upsert
 ```
 
+### Enrollment Commands
+
+Enrollment operations use **transactions** to ensure data integrity. All validation happens within a transaction, which rolls back automatically if any check fails.
+
+**Enroll a User in a Course:**
+```bash
+./bin/gosql enrollment-create -u 1 -c 1
+```
+This uses a transaction to:
+1. Verify the user exists
+2. Verify the course exists
+3. Create the enrollment
+4. Rollback if ANY step fails
+
+**List All Enrollments:**
+```bash
+./bin/gosql enrollment-list
+```
+
+**List Enrollments by User:**
+```bash
+./bin/gosql enrollment-by-user -u 1
+```
+
+**List Enrollments by Course:**
+```bash
+./bin/gosql enrollment-by-course -c 1
+```
+
+**Complete an Enrollment:**
+```bash
+./bin/gosql enrollment-complete -u 1 -c 1
+```
+
+**Cancel an Enrollment:**
+```bash
+./bin/gosql enrollment-cancel -u 1 -c 1
+```
+
+## Demo Scripts
+
+### Transaction Demo
+
+Run the enrollment demo to see transactions in action:
+```bash
+./examples/enrollment_demo.sh
+```
+
+This demonstrates:
+- ✅ Successful enrollments (transaction commits)
+- ❌ Failed enrollments with non-existent users (transaction rolls back)
+- ❌ Failed enrollments with non-existent courses (transaction rolls back)
+- ❌ Duplicate enrollment prevention (UNIQUE constraint + rollback)
+- 📊 Enrollment status tracking (active, completed, cancelled)
+
+Key transaction benefits:
+- **Atomicity**: All checks pass or nothing happens
+- **Consistency**: UNIQUE constraints prevent duplicates
+- **Integrity**: Foreign keys prevent orphaned records
+- **Rollback**: Invalid operations have no side effects
+
 ## Performance Demo
 
 Run the bash script to see prepared statements in action:
@@ -113,6 +175,7 @@ Example output:
 
 ## Example JSON Output
 
+**User:**
 ```json
 {
   "id": 1,
@@ -120,6 +183,21 @@ Example output:
   "name": "John Doe",
   "age": 30,
   "created_at": "2026-06-21T09:58:05Z"
+}
+```
+
+**Enrollment with Details:**
+```json
+{
+  "id": 1,
+  "user_id": 1,
+  "user_email": "alice@example.com",
+  "user_name": "Alice Smith",
+  "course_id": 1,
+  "course_slug": "go-basics",
+  "course_title": "Go Programming Basics",
+  "enrolled_at": "2026-06-24T10:52:13Z",
+  "status": "active"
 }
 ```
 
@@ -135,12 +213,14 @@ Example output:
 │   │   └── sqlite.go        # Database connection and schema
 │   │
 │   └── storage/
-│       ├── models.go        # Data models (Course, User)
+│       ├── models.go        # Data models (Course, User, Enrollment)
 │       ├── course.go        # CourseRepository
-│       └── user.go          # UserRepository
+│       ├── user.go          # UserRepository
+│       └── enrollment.go    # EnrollmentRepository with transactions
 │
 ├── examples/
-│   └── user_example.go      # Example usage
+│   ├── enrollment_demo.sh   # Transaction demo script
+│   └── bulk_performance_demo.sh # Bulk operations demo
 │
 └── docs/
     └── ARCHITECTURE.md      # Detailed architecture documentation
@@ -166,7 +246,34 @@ Each entity has its own repository:
 ```go
 courseRepo.Create(ctx, CreateCourseDTO{...})
 userRepo.List(ctx)
+enrollmentRepo.EnrollUser(ctx, userID, courseID)
 ```
+
+### Transactions
+
+The `withTx` helper wraps operations in a database transaction:
+
+```go
+func withTx(ctx context.Context, db *sql.DB, fn func(*sql.Tx) error) error {
+    tx, err := db.BeginTx(ctx, nil)
+    if err != nil {
+        return fmt.Errorf("begin tx: %w", err)
+    }
+    defer tx.Rollback()  // Rollback if not committed
+
+    if err := fn(tx); err != nil {
+        return err  // Automatic rollback
+    }
+
+    return tx.Commit()  // Commit if no errors
+}
+```
+
+Used in `EnrollUser` to ensure atomicity:
+1. Check user exists
+2. Check course exists
+3. Create enrollment
+4. If ANY step fails, rollback entire transaction
 
 ## Documentation
 
