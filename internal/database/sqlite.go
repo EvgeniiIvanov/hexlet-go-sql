@@ -62,6 +62,16 @@ func InitSchema(ctx context.Context, db *sql.DB) error {
 			age INTEGER,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
+		`CREATE TABLE IF NOT EXISTS enrollments (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER NOT NULL,
+			course_id INTEGER NOT NULL,
+			enrolled_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			status TEXT NOT NULL DEFAULT 'active',
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+			FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
+			UNIQUE(user_id, course_id)
+		)`,
 	}
 
 	for _, schema := range schemas {

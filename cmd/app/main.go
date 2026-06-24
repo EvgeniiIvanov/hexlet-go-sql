@@ -27,6 +27,13 @@ var CLI struct {
 	UserList       UserListCmd       `cmd:"" help:"List all users"`
 	UserGet        UserGetCmd        `cmd:"" help:"Get user by ID"`
 	UserBulkUpsert UserBulkUpsertCmd `cmd:"" help:"Bulk upsert users from JSON file or stdin"`
+
+	EnrollmentCreate   EnrollmentCreateCmd   `cmd:"" help:"Enroll a user in a course (using transaction)"`
+	EnrollmentCancel   EnrollmentCancelCmd   `cmd:"" help:"Cancel a user's enrollment"`
+	EnrollmentComplete EnrollmentCompleteCmd `cmd:"" help:"Mark an enrollment as completed"`
+	EnrollmentList     EnrollmentListCmd     `cmd:"" help:"List all enrollments"`
+	EnrollmentByUser   EnrollmentByUserCmd   `cmd:"" help:"List enrollments for a specific user"`
+	EnrollmentByCourse EnrollmentByCourseCmd `cmd:"" help:"List enrollments for a specific course"`
 }
 
 type CourseAddCmd struct {
@@ -227,6 +234,95 @@ func (cmd *UserBulkUpsertCmd) Run(ctx context.Context, repo *storage.UserReposit
 	return printJSON(result)
 }
 
+// Enrollment commands
+
+type EnrollmentCreateCmd struct {
+	UserID   int64 `short:"u" help:"User ID" required:""`
+	CourseID int64 `short:"c" help:"Course ID" required:""`
+}
+
+func (cmd *EnrollmentCreateCmd) Run(ctx context.Context, repo *storage.EnrollmentRepository) error {
+	enrollment, err := repo.EnrollUser(ctx, cmd.UserID, cmd.CourseID)
+	if err != nil {
+		return fmt.Errorf("enroll user: %w", err)
+	}
+
+	return printJSON(enrollment)
+}
+
+type EnrollmentCancelCmd struct {
+	UserID   int64 `short:"u" help:"User ID" required:""`
+	CourseID int64 `short:"c" help:"Course ID" required:""`
+}
+
+func (cmd *EnrollmentCancelCmd) Run(ctx context.Context, repo *storage.EnrollmentRepository) error {
+	if err := repo.UnenrollUser(ctx, cmd.UserID, cmd.CourseID); err != nil {
+		return fmt.Errorf("cancel enrollment: %w", err)
+	}
+
+	result := map[string]interface{}{
+		"success": true,
+		"message": fmt.Sprintf("Successfully cancelled enrollment for user %d in course %d", cmd.UserID, cmd.CourseID),
+	}
+
+	return printJSON(result)
+}
+
+type EnrollmentCompleteCmd struct {
+	UserID   int64 `short:"u" help:"User ID" required:""`
+	CourseID int64 `short:"c" help:"Course ID" required:""`
+}
+
+func (cmd *EnrollmentCompleteCmd) Run(ctx context.Context, repo *storage.EnrollmentRepository) error {
+	if err := repo.CompleteEnrollment(ctx, cmd.UserID, cmd.CourseID); err != nil {
+		return fmt.Errorf("complete enrollment: %w", err)
+	}
+
+	result := map[string]interface{}{
+		"success": true,
+		"message": fmt.Sprintf("Successfully completed enrollment for user %d in course %d", cmd.UserID, cmd.CourseID),
+	}
+
+	return printJSON(result)
+}
+
+type EnrollmentListCmd struct{}
+
+func (cmd *EnrollmentListCmd) Run(ctx context.Context, repo *storage.EnrollmentRepository) error {
+	enrollments, err := repo.ListAll(ctx)
+	if err != nil {
+		return fmt.Errorf("list enrollments: %w", err)
+	}
+
+	return printJSON(enrollments)
+}
+
+type EnrollmentByUserCmd struct {
+	UserID int64 `short:"u" help:"User ID" required:""`
+}
+
+func (cmd *EnrollmentByUserCmd) Run(ctx context.Context, repo *storage.EnrollmentRepository) error {
+	enrollments, err := repo.GetUserEnrollments(ctx, cmd.UserID)
+	if err != nil {
+		return fmt.Errorf("get user enrollments: %w", err)
+	}
+
+	return printJSON(enrollments)
+}
+
+type EnrollmentByCourseCmd struct {
+	CourseID int64 `short:"c" help:"Course ID" required:""`
+}
+
+func (cmd *EnrollmentByCourseCmd) Run(ctx context.Context, repo *storage.EnrollmentRepository) error {
+	enrollments, err := repo.GetCourseEnrollments(ctx, cmd.CourseID)
+	if err != nil {
+		return fmt.Errorf("get course enrollments: %w", err)
+	}
+
+	return printJSON(enrollments)
+}
+
 // Helper functions
 
 func printJSON(v interface{}) error {
@@ -257,6 +353,7 @@ func main() {
 	// Create repositories
 	courseRepo := storage.NewCourseRepository(db)
 	userRepo := storage.NewUserRepository(db)
+	enrollmentRepo := storage.NewEnrollmentRepository(db)
 
 	kongCtx := kong.Parse(&CLI,
 		kong.Name("gosql"),
@@ -264,6 +361,7 @@ func main() {
 		kong.BindTo(ctx, (*context.Context)(nil)),
 		kong.Bind(courseRepo),
 		kong.Bind(userRepo),
+		kong.Bind(enrollmentRepo),
 	)
 
 	if err := kongCtx.Run(); err != nil {
