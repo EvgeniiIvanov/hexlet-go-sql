@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,7 +13,9 @@ import (
 	"github.com/alecthomas/kong"
 
 	"example.com/go-sql/internal/database"
-	"example.com/go-sql/internal/storage"
+	"example.com/go-sql/internal/db"
+	"example.com/go-sql/internal/models"
+	"example.com/go-sql/internal/repository"
 )
 
 var CLI struct {
@@ -36,65 +39,65 @@ var CLI struct {
 	EnrollmentByCourse EnrollmentByCourseCmd `cmd:"" help:"List enrollments for a specific course"`
 }
 
+// Course commands
+
 type CourseAddCmd struct {
 	Slug  string `short:"s" help:"Course slug (unique identifier)" required:""`
 	Title string `short:"t" help:"Course title" required:""`
-	Price int    `short:"p" help:"Course price in USD" default:"0"`
+	Price int64  `short:"p" help:"Course price in USD" default:"0"`
 }
 
-func (cmd *CourseAddCmd) Run(ctx context.Context, repo *storage.CourseRepository) error {
-	dto := storage.CreateCourseDTO{
+func (cmd *CourseAddCmd) Run(ctx context.Context, queries *db.Queries) error {
+	course, err := queries.CreateCourse(ctx, db.CreateCourseParams{
 		Slug:  cmd.Slug,
 		Title: cmd.Title,
 		Price: cmd.Price,
-	}
-
-	course, err := repo.Create(ctx, dto)
+	})
 	if err != nil {
 		return fmt.Errorf("create course: %w", err)
 	}
 
-	return printJSON(course)
+	return printJSON(models.FromDBCourse(course))
 }
 
-type CourseListCmd struct {
-	Limit  int    `short:"l" help:"Number of courses to return" default:"10"`
-	Offset int    `short:"o" help:"Offset for pagination" default:"0"`
-	Order  string `short:"r" help:"Order by field (id, slug, title, price)" default:"id" enum:"id,slug,title,price"`
-}
+type CourseListCmd struct{}
 
-func (cmd *CourseListCmd) Run(ctx context.Context, repo *storage.CourseRepository) error {
-	courses, err := repo.List(ctx, cmd.Limit, cmd.Offset, cmd.Order)
+func (cmd *CourseListCmd) Run(ctx context.Context, queries *db.Queries) error {
+	courses, err := queries.ListCourses(ctx)
 	if err != nil {
 		return fmt.Errorf("list courses: %w", err)
 	}
 
-	return printJSON(courses)
+	return printJSON(models.FromDBCourses(courses))
 }
 
 type CourseFindCmd struct {
-	IDs []int64 `arg:"" name:"ids" help:"Course IDs to find" required:""`
+	IDs []int64 `arg:"" help:"Course IDs to find"`
 }
 
-func (cmd *CourseFindCmd) Run(ctx context.Context, repo *storage.CourseRepository) error {
-	courses, err := repo.FindByIDs(ctx, cmd.IDs)
+func (cmd *CourseFindCmd) Run(ctx context.Context, queries *db.Queries) error {
+	courses, err := queries.FindCoursesByIDs(ctx, cmd.IDs)
 	if err != nil {
 		return fmt.Errorf("find courses: %w", err)
 	}
 
-	return printJSON(courses)
+	return printJSON(models.FromDBCourses(courses))
 }
 
 type CourseBulkUpsertCmd struct {
 	File string `short:"f" help:"JSON file with courses array (use '-' for stdin)" default:"-"`
 }
 
-func (cmd *CourseBulkUpsertCmd) Run(ctx context.Context, repo *storage.CourseRepository) error {
+type CourseDTO struct {
+	Slug  string `json:"slug"`
+	Title string `json:"title"`
+	Price int64  `json:"price"`
+}
+
+func (cmd *CourseBulkUpsertCmd) Run(ctx context.Context, repo *repository.Repository) error {
 	start := time.Now()
 
-	var dtos []storage.CreateCourseDTO
-
-	// Read from file or stdin
+	var dtos []CourseDTO
 	var data []byte
 	var err error
 
@@ -110,19 +113,25 @@ func (cmd *CourseBulkUpsertCmd) Run(ctx context.Context, repo *storage.CourseRep
 		}
 	}
 
-	// Parse JSON
 	if err := json.Unmarshal(data, &dtos); err != nil {
 		return fmt.Errorf("parse json: %w", err)
 	}
 
-	// Perform bulk upsert
+	params := make([]db.UpsertCourseParams, len(dtos))
+	for i, dto := range dtos {
+		params[i] = db.UpsertCourseParams{
+			Slug:  dto.Slug,
+			Title: dto.Title,
+			Price: dto.Price,
+		}
+	}
+
 	operationStart := time.Now()
-	if err := repo.BulkUpsert(ctx, dtos); err != nil {
+	if err := repo.BulkUpsertCourses(ctx, params); err != nil {
 		return fmt.Errorf("bulk upsert: %w", err)
 	}
 	operationDuration := time.Since(operationStart)
 
-	// Return success message with timing
 	result := map[string]interface{}{
 		"success":        true,
 		"count":          len(dtos),
@@ -138,90 +147,110 @@ func (cmd *CourseBulkUpsertCmd) Run(ctx context.Context, repo *storage.CourseRep
 // User commands
 
 type UserAddCmd struct {
-	Email string  `short:"e" help:"User email (required)" required:""`
-	Name  *string `short:"n" help:"User name (optional)"`
-	Age   *int    `short:"a" help:"User age (optional)"`
+	Email string `short:"e" help:"User email" required:""`
+	Name  string `short:"n" help:"User name (optional)"`
+	Age   int64  `short:"a" help:"User age (optional)"`
 }
 
-func (cmd *UserAddCmd) Run(ctx context.Context, repo *storage.UserRepository) error {
-	dto := storage.CreateUserDTO{
-		Email: cmd.Email,
-		Name:  cmd.Name,
-		Age:   cmd.Age,
+func (cmd *UserAddCmd) Run(ctx context.Context, queries *db.Queries) error {
+	var name sql.NullString
+	var age sql.NullInt64
+
+	if cmd.Name != "" {
+		name = sql.NullString{String: cmd.Name, Valid: true}
+	}
+	if cmd.Age > 0 {
+		age = sql.NullInt64{Int64: cmd.Age, Valid: true}
 	}
 
-	user, err := repo.Create(ctx, dto)
+	user, err := queries.CreateUser(ctx, db.CreateUserParams{
+		Email: cmd.Email,
+		Name:  name,
+		Age:   age,
+	})
 	if err != nil {
 		return fmt.Errorf("create user: %w", err)
 	}
 
-	return printJSON(user)
+	return printJSON(models.FromDBUser(user))
 }
 
 type UserListCmd struct{}
 
-func (cmd *UserListCmd) Run(ctx context.Context, repo *storage.UserRepository) error {
-	users, err := repo.List(ctx)
+func (cmd *UserListCmd) Run(ctx context.Context, queries *db.Queries) error {
+	users, err := queries.ListUsers(ctx)
 	if err != nil {
 		return fmt.Errorf("list users: %w", err)
 	}
 
-	return printJSON(users)
+	return printJSON(models.FromDBUsers(users))
 }
 
 type UserGetCmd struct {
-	ID int64 `arg:"" help:"User ID to retrieve" required:""`
+	ID int64 `arg:"" help:"User ID"`
 }
 
-func (cmd *UserGetCmd) Run(ctx context.Context, repo *storage.UserRepository) error {
-	user, err := repo.Get(ctx, cmd.ID)
+func (cmd *UserGetCmd) Run(ctx context.Context, queries *db.Queries) error {
+	user, err := queries.GetUser(ctx, cmd.ID)
 	if err != nil {
 		return fmt.Errorf("get user: %w", err)
 	}
 
-	return printJSON(user)
+	return printJSON(models.FromDBUser(user))
 }
 
 type UserBulkUpsertCmd struct {
 	File string `short:"f" help:"JSON file with users array (use '-' for stdin)" default:"-"`
 }
 
-func (cmd *UserBulkUpsertCmd) Run(ctx context.Context, repo *storage.UserRepository) error {
+type UserDTO struct {
+	Email string  `json:"email"`
+	Name  *string `json:"name,omitempty"`
+	Age   *int64  `json:"age,omitempty"`
+}
+
+func (cmd *UserBulkUpsertCmd) Run(ctx context.Context, repo *repository.Repository) error {
 	start := time.Now()
 
-	var dtos []storage.CreateUserDTO
-
-	// Read from file or stdin
+	var dtos []UserDTO
 	var data []byte
 	var err error
 
 	if cmd.File == "-" {
-		// Read from stdin
 		data, err = io.ReadAll(os.Stdin)
 		if err != nil {
 			return fmt.Errorf("read stdin: %w", err)
 		}
 	} else {
-		// Read from file
 		data, err = os.ReadFile(cmd.File)
 		if err != nil {
 			return fmt.Errorf("read file: %w", err)
 		}
 	}
 
-	// Parse JSON
 	if err := json.Unmarshal(data, &dtos); err != nil {
 		return fmt.Errorf("parse json: %w", err)
 	}
 
-	// Perform bulk upsert
+	params := make([]db.UpsertUserParams, len(dtos))
+	for i, dto := range dtos {
+		params[i] = db.UpsertUserParams{
+			Email: dto.Email,
+		}
+		if dto.Name != nil {
+			params[i].Name = sql.NullString{String: *dto.Name, Valid: true}
+		}
+		if dto.Age != nil {
+			params[i].Age = sql.NullInt64{Int64: *dto.Age, Valid: true}
+		}
+	}
+
 	operationStart := time.Now()
-	if err := repo.BulkUpsert(ctx, dtos); err != nil {
+	if err := repo.BulkUpsertUsers(ctx, params); err != nil {
 		return fmt.Errorf("bulk upsert: %w", err)
 	}
 	operationDuration := time.Since(operationStart)
 
-	// Return success message with timing
 	result := map[string]interface{}{
 		"success":        true,
 		"count":          len(dtos),
@@ -241,13 +270,13 @@ type EnrollmentCreateCmd struct {
 	CourseID int64 `short:"c" help:"Course ID" required:""`
 }
 
-func (cmd *EnrollmentCreateCmd) Run(ctx context.Context, repo *storage.EnrollmentRepository) error {
+func (cmd *EnrollmentCreateCmd) Run(ctx context.Context, repo *repository.Repository) error {
 	enrollment, err := repo.EnrollUser(ctx, cmd.UserID, cmd.CourseID)
 	if err != nil {
 		return fmt.Errorf("enroll user: %w", err)
 	}
 
-	return printJSON(enrollment)
+	return printJSON(models.FromDBEnrollment(enrollment))
 }
 
 type EnrollmentCancelCmd struct {
@@ -255,8 +284,8 @@ type EnrollmentCancelCmd struct {
 	CourseID int64 `short:"c" help:"Course ID" required:""`
 }
 
-func (cmd *EnrollmentCancelCmd) Run(ctx context.Context, repo *storage.EnrollmentRepository) error {
-	if err := repo.UnenrollUser(ctx, cmd.UserID, cmd.CourseID); err != nil {
+func (cmd *EnrollmentCancelCmd) Run(ctx context.Context, repo *repository.Repository) error {
+	if err := repo.CancelEnrollment(ctx, cmd.UserID, cmd.CourseID); err != nil {
 		return fmt.Errorf("cancel enrollment: %w", err)
 	}
 
@@ -273,7 +302,7 @@ type EnrollmentCompleteCmd struct {
 	CourseID int64 `short:"c" help:"Course ID" required:""`
 }
 
-func (cmd *EnrollmentCompleteCmd) Run(ctx context.Context, repo *storage.EnrollmentRepository) error {
+func (cmd *EnrollmentCompleteCmd) Run(ctx context.Context, repo *repository.Repository) error {
 	if err := repo.CompleteEnrollment(ctx, cmd.UserID, cmd.CourseID); err != nil {
 		return fmt.Errorf("complete enrollment: %w", err)
 	}
@@ -288,39 +317,39 @@ func (cmd *EnrollmentCompleteCmd) Run(ctx context.Context, repo *storage.Enrollm
 
 type EnrollmentListCmd struct{}
 
-func (cmd *EnrollmentListCmd) Run(ctx context.Context, repo *storage.EnrollmentRepository) error {
-	enrollments, err := repo.ListAll(ctx)
+func (cmd *EnrollmentListCmd) Run(ctx context.Context, queries *db.Queries) error {
+	enrollments, err := queries.ListEnrollments(ctx)
 	if err != nil {
 		return fmt.Errorf("list enrollments: %w", err)
 	}
 
-	return printJSON(enrollments)
+	return printJSON(models.FromDBListEnrollmentsRows(enrollments))
 }
 
 type EnrollmentByUserCmd struct {
 	UserID int64 `short:"u" help:"User ID" required:""`
 }
 
-func (cmd *EnrollmentByUserCmd) Run(ctx context.Context, repo *storage.EnrollmentRepository) error {
-	enrollments, err := repo.GetUserEnrollments(ctx, cmd.UserID)
+func (cmd *EnrollmentByUserCmd) Run(ctx context.Context, queries *db.Queries) error {
+	enrollments, err := queries.ListEnrollmentsByUser(ctx, cmd.UserID)
 	if err != nil {
 		return fmt.Errorf("get user enrollments: %w", err)
 	}
 
-	return printJSON(enrollments)
+	return printJSON(models.FromDBListEnrollmentsByUserRows(enrollments))
 }
 
 type EnrollmentByCourseCmd struct {
 	CourseID int64 `short:"c" help:"Course ID" required:""`
 }
 
-func (cmd *EnrollmentByCourseCmd) Run(ctx context.Context, repo *storage.EnrollmentRepository) error {
-	enrollments, err := repo.GetCourseEnrollments(ctx, cmd.CourseID)
+func (cmd *EnrollmentByCourseCmd) Run(ctx context.Context, queries *db.Queries) error {
+	enrollments, err := queries.ListEnrollmentsByCourse(ctx, cmd.CourseID)
 	if err != nil {
 		return fmt.Errorf("get course enrollments: %w", err)
 	}
 
-	return printJSON(enrollments)
+	return printJSON(models.FromDBListEnrollmentsByCourseRows(enrollments))
 }
 
 // Helper functions
@@ -339,29 +368,27 @@ func main() {
 	defer cancel()
 
 	// Connect to database
-	db, err := database.Connect(ctx, database.DefaultConfig())
+	dbConn, err := database.Connect(ctx, database.DefaultConfig())
 	if err != nil {
 		log.Fatalf("database connection failed: %v", err)
 	}
-	defer db.Close()
+	defer dbConn.Close()
 
 	// Initialize schema
-	if err := database.InitSchema(ctx, db); err != nil {
+	if err := database.InitSchema(ctx, dbConn); err != nil {
 		log.Fatalf("schema initialization failed: %v", err)
 	}
 
-	// Create repositories
-	courseRepo := storage.NewCourseRepository(db)
-	userRepo := storage.NewUserRepository(db)
-	enrollmentRepo := storage.NewEnrollmentRepository(db)
+	// Create queries and repository
+	queries := db.New(dbConn)
+	repo := repository.New(dbConn)
 
 	kongCtx := kong.Parse(&CLI,
 		kong.Name("gosql"),
-		kong.Description("A CLI tool for managing SQLite databases"),
+		kong.Description("A CLI tool for managing SQLite databases with sqlc"),
 		kong.BindTo(ctx, (*context.Context)(nil)),
-		kong.Bind(courseRepo),
-		kong.Bind(userRepo),
-		kong.Bind(enrollmentRepo),
+		kong.Bind(queries),
+		kong.Bind(repo),
 	)
 
 	if err := kongCtx.Run(); err != nil {
