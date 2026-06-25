@@ -2,7 +2,10 @@ version: "2"
 sql:
   - engine: sqlite
     schema: migrations
-    queries: query
+    queries:
+      - query/users
+      - query/courses
+      - query/enrollments
     gen:
       go:
         package: db

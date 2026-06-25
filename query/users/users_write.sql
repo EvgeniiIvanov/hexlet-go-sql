@@ -3,18 +3,6 @@ INSERT INTO users (email, name, age)
 VALUES (?, ?, ?)
 RETURNING *;
 
--- name: GetUser :one
-SELECT * FROM users
-WHERE id = ?;
-
--- name: GetUserByEmail :one
-SELECT * FROM users
-WHERE email = ?;
-
--- name: ListUsers :many
-SELECT * FROM users
-ORDER BY id;
-
 -- name: UpdateUser :exec
 UPDATE users
 SET name = COALESCE(sqlc.narg('name'), name),
