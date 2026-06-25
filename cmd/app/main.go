@@ -14,8 +14,8 @@ import (
 
 	"example.com/go-sql/internal/database"
 	"example.com/go-sql/internal/db"
-	"example.com/go-sql/internal/models"
 	"example.com/go-sql/internal/repository"
+	"example.com/go-sql/internal/service"
 )
 
 var CLI struct {
@@ -47,17 +47,13 @@ type CourseAddCmd struct {
 	Price int64  `short:"p" help:"Course price in USD" default:"0"`
 }
 
-func (cmd *CourseAddCmd) Run(ctx context.Context, queries *db.Queries) error {
-	course, err := queries.CreateCourse(ctx, db.CreateCourseParams{
-		Slug:  cmd.Slug,
-		Title: cmd.Title,
-		Price: cmd.Price,
-	})
+func (cmd *CourseAddCmd) Run(ctx context.Context, svc *service.Service) error {
+	course, err := svc.CreateCourse(ctx, cmd.Slug, cmd.Title, cmd.Price)
 	if err != nil {
-		return fmt.Errorf("create course: %w", err)
+		return err
 	}
 
-	return printJSON(models.FromDBCourse(course))
+	return printJSON(course)
 }
 
 type CourseListCmd struct {
@@ -65,29 +61,26 @@ type CourseListCmd struct {
 	Offset int64 `short:"o" help:"Offset for pagination" default:"0"`
 }
 
-func (cmd *CourseListCmd) Run(ctx context.Context, queries *db.Queries) error {
-	courses, err := queries.ListCourses(ctx, db.ListCoursesParams{
-		Limit:  cmd.Limit,
-		Offset: cmd.Offset,
-	})
+func (cmd *CourseListCmd) Run(ctx context.Context, svc *service.Service) error {
+	courses, err := svc.ListCourses(ctx, cmd.Limit, cmd.Offset)
 	if err != nil {
-		return fmt.Errorf("list courses: %w", err)
+		return err
 	}
 
-	return printJSON(models.FromDBCourses(courses))
+	return printJSON(courses)
 }
 
 type CourseFindCmd struct {
 	IDs []int64 `arg:"" help:"Course IDs to find"`
 }
 
-func (cmd *CourseFindCmd) Run(ctx context.Context, queries *db.Queries) error {
-	courses, err := queries.FindCoursesByIDs(ctx, cmd.IDs)
+func (cmd *CourseFindCmd) Run(ctx context.Context, svc *service.Service) error {
+	courses, err := svc.FindCoursesByIDs(ctx, cmd.IDs)
 	if err != nil {
-		return fmt.Errorf("find courses: %w", err)
+		return err
 	}
 
-	return printJSON(models.FromDBCourses(courses))
+	return printJSON(courses)
 }
 
 type CourseBulkUpsertCmd struct {
@@ -100,7 +93,7 @@ type CourseDTO struct {
 	Price int64  `json:"price"`
 }
 
-func (cmd *CourseBulkUpsertCmd) Run(ctx context.Context, repo *repository.Repository) error {
+func (cmd *CourseBulkUpsertCmd) Run(ctx context.Context, svc *service.Service) error {
 	start := time.Now()
 
 	var dtos []CourseDTO
@@ -133,7 +126,7 @@ func (cmd *CourseBulkUpsertCmd) Run(ctx context.Context, repo *repository.Reposi
 	}
 
 	operationStart := time.Now()
-	if err := repo.BulkUpsertCourses(ctx, params); err != nil {
+	if err := svc.BulkUpsertCourses(ctx, params); err != nil {
 		return fmt.Errorf("bulk upsert: %w", err)
 	}
 	operationDuration := time.Since(operationStart)
@@ -158,7 +151,7 @@ type UserAddCmd struct {
 	Age   int64  `short:"a" help:"User age (optional)"`
 }
 
-func (cmd *UserAddCmd) Run(ctx context.Context, queries *db.Queries) error {
+func (cmd *UserAddCmd) Run(ctx context.Context, svc *service.Service) error {
 	var name sql.NullString
 	var age sql.NullInt64
 
@@ -169,16 +162,12 @@ func (cmd *UserAddCmd) Run(ctx context.Context, queries *db.Queries) error {
 		age = sql.NullInt64{Int64: cmd.Age, Valid: true}
 	}
 
-	user, err := queries.CreateUser(ctx, db.CreateUserParams{
-		Email: cmd.Email,
-		Name:  name,
-		Age:   age,
-	})
+	user, err := svc.CreateUser(ctx, cmd.Email, name, age)
 	if err != nil {
-		return fmt.Errorf("create user: %w", err)
+		return err
 	}
 
-	return printJSON(models.FromDBUser(user))
+	return printJSON(user)
 }
 
 type UserListCmd struct {
@@ -186,29 +175,26 @@ type UserListCmd struct {
 	Offset int64 `short:"o" help:"Offset for pagination" default:"0"`
 }
 
-func (cmd *UserListCmd) Run(ctx context.Context, queries *db.Queries) error {
-	users, err := queries.ListUsers(ctx, db.ListUsersParams{
-		Limit:  cmd.Limit,
-		Offset: cmd.Offset,
-	})
+func (cmd *UserListCmd) Run(ctx context.Context, svc *service.Service) error {
+	users, err := svc.ListUsers(ctx, cmd.Limit, cmd.Offset)
 	if err != nil {
-		return fmt.Errorf("list users: %w", err)
+		return err
 	}
 
-	return printJSON(models.FromDBUsers(users))
+	return printJSON(users)
 }
 
 type UserGetCmd struct {
 	ID int64 `arg:"" help:"User ID"`
 }
 
-func (cmd *UserGetCmd) Run(ctx context.Context, queries *db.Queries) error {
-	user, err := queries.GetUser(ctx, cmd.ID)
+func (cmd *UserGetCmd) Run(ctx context.Context, svc *service.Service) error {
+	user, err := svc.GetUser(ctx, cmd.ID)
 	if err != nil {
-		return fmt.Errorf("get user: %w", err)
+		return err
 	}
 
-	return printJSON(models.FromDBUser(user))
+	return printJSON(user)
 }
 
 type UserBulkUpsertCmd struct {
@@ -221,7 +207,7 @@ type UserDTO struct {
 	Age   *int64  `json:"age,omitempty"`
 }
 
-func (cmd *UserBulkUpsertCmd) Run(ctx context.Context, repo *repository.Repository) error {
+func (cmd *UserBulkUpsertCmd) Run(ctx context.Context, svc *service.Service) error {
 	start := time.Now()
 
 	var dtos []UserDTO
@@ -258,7 +244,7 @@ func (cmd *UserBulkUpsertCmd) Run(ctx context.Context, repo *repository.Reposito
 	}
 
 	operationStart := time.Now()
-	if err := repo.BulkUpsertUsers(ctx, params); err != nil {
+	if err := svc.BulkUpsertUsers(ctx, params); err != nil {
 		return fmt.Errorf("bulk upsert: %w", err)
 	}
 	operationDuration := time.Since(operationStart)
@@ -282,13 +268,13 @@ type EnrollmentCreateCmd struct {
 	CourseID int64 `short:"c" help:"Course ID" required:""`
 }
 
-func (cmd *EnrollmentCreateCmd) Run(ctx context.Context, repo *repository.Repository) error {
-	enrollment, err := repo.EnrollUser(ctx, cmd.UserID, cmd.CourseID)
+func (cmd *EnrollmentCreateCmd) Run(ctx context.Context, svc *service.Service) error {
+	enrollment, err := svc.EnrollUser(ctx, cmd.UserID, cmd.CourseID)
 	if err != nil {
-		return fmt.Errorf("enroll user: %w", err)
+		return err
 	}
 
-	return printJSON(models.FromDBEnrollment(enrollment))
+	return printJSON(enrollment)
 }
 
 type EnrollmentCancelCmd struct {
@@ -296,9 +282,9 @@ type EnrollmentCancelCmd struct {
 	CourseID int64 `short:"c" help:"Course ID" required:""`
 }
 
-func (cmd *EnrollmentCancelCmd) Run(ctx context.Context, repo *repository.Repository) error {
-	if err := repo.CancelEnrollment(ctx, cmd.UserID, cmd.CourseID); err != nil {
-		return fmt.Errorf("cancel enrollment: %w", err)
+func (cmd *EnrollmentCancelCmd) Run(ctx context.Context, svc *service.Service) error {
+	if err := svc.CancelEnrollment(ctx, cmd.UserID, cmd.CourseID); err != nil {
+		return err
 	}
 
 	result := map[string]interface{}{
@@ -314,9 +300,9 @@ type EnrollmentCompleteCmd struct {
 	CourseID int64 `short:"c" help:"Course ID" required:""`
 }
 
-func (cmd *EnrollmentCompleteCmd) Run(ctx context.Context, repo *repository.Repository) error {
-	if err := repo.CompleteEnrollment(ctx, cmd.UserID, cmd.CourseID); err != nil {
-		return fmt.Errorf("complete enrollment: %w", err)
+func (cmd *EnrollmentCompleteCmd) Run(ctx context.Context, svc *service.Service) error {
+	if err := svc.CompleteEnrollment(ctx, cmd.UserID, cmd.CourseID); err != nil {
+		return err
 	}
 
 	result := map[string]interface{}{
@@ -332,42 +318,39 @@ type EnrollmentListCmd struct {
 	Offset int64 `short:"o" help:"Offset for pagination" default:"0"`
 }
 
-func (cmd *EnrollmentListCmd) Run(ctx context.Context, queries *db.Queries) error {
-	enrollments, err := queries.ListEnrollments(ctx, db.ListEnrollmentsParams{
-		Limit:  cmd.Limit,
-		Offset: cmd.Offset,
-	})
+func (cmd *EnrollmentListCmd) Run(ctx context.Context, svc *service.Service) error {
+	enrollments, err := svc.ListEnrollments(ctx, cmd.Limit, cmd.Offset)
 	if err != nil {
-		return fmt.Errorf("list enrollments: %w", err)
+		return err
 	}
 
-	return printJSON(models.FromDBListEnrollmentsRows(enrollments))
+	return printJSON(enrollments)
 }
 
 type EnrollmentByUserCmd struct {
 	UserID int64 `short:"u" help:"User ID" required:""`
 }
 
-func (cmd *EnrollmentByUserCmd) Run(ctx context.Context, queries *db.Queries) error {
-	enrollments, err := queries.ListEnrollmentsByUser(ctx, cmd.UserID)
+func (cmd *EnrollmentByUserCmd) Run(ctx context.Context, svc *service.Service) error {
+	enrollments, err := svc.ListEnrollmentsByUser(ctx, cmd.UserID)
 	if err != nil {
-		return fmt.Errorf("get user enrollments: %w", err)
+		return err
 	}
 
-	return printJSON(models.FromDBListEnrollmentsByUserRows(enrollments))
+	return printJSON(enrollments)
 }
 
 type EnrollmentByCourseCmd struct {
 	CourseID int64 `short:"c" help:"Course ID" required:""`
 }
 
-func (cmd *EnrollmentByCourseCmd) Run(ctx context.Context, queries *db.Queries) error {
-	enrollments, err := queries.ListEnrollmentsByCourse(ctx, cmd.CourseID)
+func (cmd *EnrollmentByCourseCmd) Run(ctx context.Context, svc *service.Service) error {
+	enrollments, err := svc.ListEnrollmentsByCourse(ctx, cmd.CourseID)
 	if err != nil {
-		return fmt.Errorf("get course enrollments: %w", err)
+		return err
 	}
 
-	return printJSON(models.FromDBListEnrollmentsByCourseRows(enrollments))
+	return printJSON(enrollments)
 }
 
 // Helper functions
@@ -397,16 +380,15 @@ func main() {
 		log.Fatalf("schema initialization failed: %v", err)
 	}
 
-	// Create queries and repository
-	queries := db.New(dbConn)
+	// Create repository and service
 	repo := repository.New(dbConn)
+	svc := service.New(repo)
 
 	kongCtx := kong.Parse(&CLI,
 		kong.Name("gosql"),
 		kong.Description("A CLI tool for managing SQLite databases with sqlc"),
 		kong.BindTo(ctx, (*context.Context)(nil)),
-		kong.Bind(queries),
-		kong.Bind(repo),
+		kong.Bind(svc),
 	)
 
 	if err := kongCtx.Run(); err != nil {
