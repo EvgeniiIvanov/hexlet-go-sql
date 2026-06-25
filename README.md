@@ -1,23 +1,54 @@
 # Go SQL CLI Tool
 
-A command-line interface for managing SQLite databases with support for courses and users.
+A command-line interface for managing SQLite databases with support for courses, users, and enrollments. Built with **sqlc** for type-safe SQL queries.
 
 ## Features
 
+- **sqlc**: Type-safe SQL queries generated from SQL files
 - **Repository Pattern**: Clean separation of data access logic
 - **JSON Output**: All commands output structured JSON
 - **Nullable Fields**: Proper handling of optional database fields
-- **Type Safety**: Strong typing with Go structs
+- **Type Safety**: Strong typing with Go structs and sqlc-generated code
 - **Kong CLI**: Modern command-line parsing with auto-generated help
 - **Prepared Statements**: Bulk operations using prepared statements for performance
 - **Upsert Support**: Insert or update (ON CONFLICT) for both courses and users
 - **Transactions**: Atomic operations with rollback support for data integrity
 
+## Requirements
+
+- Go 1.25.0 or higher
+- **sqlc v1.31.1** - [Installation guide](https://docs.sqlc.dev/en/latest/overview/install.html)
+
+```bash
+# Install sqlc (macOS)
+brew install sqlc
+
+# Or download from GitHub releases
+# https://github.com/sqlc-dev/sqlc/releases/tag/v1.31.1
+```
+
 ## Installation
 
 ```bash
+# Clone the repository
+git clone <repo-url>
+cd hexlet-go-sql
+
+# Build the binary
 make build
 ```
+
+## Development
+
+### Regenerating sqlc code
+
+After modifying SQL schemas (`migrations/*.sql`) or queries (`query/*.sql`):
+
+```bash
+sqlc generate
+```
+
+This will regenerate the type-safe Go code in `internal/db/`.
 
 ## Usage
 
@@ -31,7 +62,6 @@ make build
 **List Courses:**
 ```bash
 ./bin/gosql course-list
-./bin/gosql course-list -l 5 -o 10 -r price
 ```
 
 **Find Courses by IDs:**
@@ -206,75 +236,209 @@ Example output:
 ```
 .
 ├── cmd/app/
-│   └── main.go              # CLI commands and entry point
+│   └── main.go                  # CLI commands and entry point
 │
 ├── internal/
 │   ├── database/
-│   │   └── sqlite.go        # Database connection and schema
+│   │   └── database.go          # Database connection and schema initialization
 │   │
-│   └── storage/
-│       ├── models.go        # Data models (Course, User, Enrollment)
-│       ├── course.go        # CourseRepository
-│       ├── user.go          # UserRepository
-│       └── enrollment.go    # EnrollmentRepository with transactions
+│   ├── db/                      # sqlc-generated code (DO NOT EDIT MANUALLY)
+│   │   ├── db.go                # Database interface and Queries struct
+│   │   ├── models.go            # Auto-generated models from schema
+│   │   ├── querier.go           # Interface for all queries
+│   │   ├── courses.sql.go       # Generated course queries
+│   │   ├── users.sql.go         # Generated user queries
+│   │   └── enrollments.sql.go  # Generated enrollment queries
+│   │
+│   ├── models/
+│   │   └── models.go            # JSON-friendly model converters
+│   │
+│   └── repository/
+│       └── repository.go        # Transaction wrapper and business logic
+│
+├── migrations/
+│   └── 001_schema.sql           # Database schema definition
+│
+├── query/
+│   ├── courses.sql              # SQL queries for courses
+│   ├── users.sql                # SQL queries for users
+│   └── enrollments.sql          # SQL queries for enrollments
 │
 ├── examples/
-│   ├── enrollment_demo.sh   # Transaction demo script
-│   └── bulk_performance_demo.sh # Bulk operations demo
+│   ├── enrollment_demo.sh       # Transaction demo script
+│   ├── bulk_performance_demo.sh # Bulk operations demo
+│   ├── README_TRANSACTIONS.md   # Transaction implementation guide
+│   └── *.json                   # Sample data files
 │
-└── docs/
-    └── ARCHITECTURE.md      # Detailed architecture documentation
+├── sqlc.yaml                    # sqlc configuration
+└── Makefile                     # Build commands
 ```
 
-## Key Concepts
+## Architecture
 
-### Nullable Fields
+### sqlc: Type-Safe SQL
 
-Fields that can be NULL in the database use pointers in Go:
+This project uses [sqlc](https://sqlc.dev/) to generate type-safe Go code from SQL queries.
+
+**Benefits:**
+- ✅ Compile-time SQL validation
+- ✅ Type-safe database operations
+- ✅ No ORM overhead
+- ✅ Full SQL feature support
+- ✅ Automatic code generation
+
+**How it works:**
+
+1. **Write SQL schemas** in `migrations/*.sql`:
+   ```sql
+   CREATE TABLE users (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       email TEXT NOT NULL UNIQUE,
+       name TEXT,
+       age INTEGER
+   );
+   ```
+
+2. **Write SQL queries** in `query/*.sql`:
+   ```sql
+   -- name: CreateUser :one
+   INSERT INTO users (email, name, age)
+   VALUES (?, ?, ?)
+   RETURNING *;
+
+   -- name: ListUsers :many
+   SELECT * FROM users ORDER BY id;
+   ```
+
+3. **Generate type-safe Go code**:
+   ```bash
+   sqlc generate
+   ```
+
+4. **Use generated code**:
+   ```go
+   user, err := queries.CreateUser(ctx, db.CreateUserParams{
+       Email: "user@example.com",
+       Name:  sql.NullString{String: "John", Valid: true},
+       Age:   sql.NullInt64{Int64: 30, Valid: true},
+   })
+   ```
+
+### Model Converters
+
+Since sqlc generates models with `sql.Null*` types (for nullable fields), we use converter functions in `internal/models/models.go` to transform them into clean JSON-friendly types:
 
 ```go
+// sqlc generates this:
 type User struct {
-    Name *string `json:"name,omitempty"`  // Can be NULL
-    Age  *int    `json:"age,omitempty"`   // Can be NULL
+    Name sql.NullString  // {"String": "John", "Valid": true}
 }
+
+// We convert to this:
+type User struct {
+    Name *string  // "John" or omitted if null
+}
+```
+
+**Usage:**
+```go
+// In CLI commands
+dbUser, err := queries.GetUser(ctx, userID)
+return printJSON(models.FromDBUser(dbUser))  // Clean JSON output
 ```
 
 ### Repository Pattern
 
-Each entity has its own repository:
+The repository layer (`internal/repository/`) provides:
+- **Transaction support** using `withTx()` helper
+- **Bulk operations** that use prepared statements
+- **Business logic** for complex operations
 
 ```go
-courseRepo.Create(ctx, CreateCourseDTO{...})
-userRepo.List(ctx)
-enrollmentRepo.EnrollUser(ctx, userID, courseID)
+// Simple queries: use sqlc Queries directly
+user, err := queries.GetUser(ctx, id)
+
+// Bulk/transaction operations: use Repository
+err := repo.BulkUpsertUsers(ctx, params)
+enrollment, err := repo.EnrollUser(ctx, userID, courseID)  // Uses transaction
 ```
 
 ### Transactions
 
-The `withTx` helper wraps operations in a database transaction:
+Transactions ensure data integrity for multi-step operations:
 
 ```go
-func withTx(ctx context.Context, db *sql.DB, fn func(*sql.Tx) error) error {
-    tx, err := db.BeginTx(ctx, nil)
-    if err != nil {
-        return fmt.Errorf("begin tx: %w", err)
-    }
-    defer tx.Rollback()  // Rollback if not committed
+func (r *Repository) EnrollUser(ctx context.Context, userID, courseID int64) (db.Enrollment, error) {
+    var enrollment db.Enrollment
 
-    if err := fn(tx); err != nil {
-        return err  // Automatic rollback
-    }
+    err := r.withTx(ctx, func(q *db.Queries) error {
+        // 1. Check user exists
+        _, err := q.CheckUserExists(ctx, userID)
+        if err != nil {
+            return fmt.Errorf("user not found")
+        }
 
-    return tx.Commit()  // Commit if no errors
+        // 2. Check course exists
+        _, err = q.CheckCourseExists(ctx, courseID)
+        if err != nil {
+            return fmt.Errorf("course not found")
+        }
+
+        // 3. Create enrollment
+        enrollment, err = q.CreateEnrollment(ctx, ...)
+        return err
+    })
+
+    return enrollment, err  // All or nothing
 }
 ```
 
-Used in `EnrollUser` to ensure atomicity:
-1. Check user exists
-2. Check course exists
-3. Create enrollment
-4. If ANY step fails, rollback entire transaction
+**Transaction guarantees:**
+- All operations succeed or all fail (atomicity)
+- Database constraints enforced (consistency)
+- No partial state (isolation)
+- Changes are permanent once committed (durability)
+
+## Quick Reference
+
+### Adding a new SQL query
+
+1. **Add query to appropriate file** in `query/` directory:
+   ```sql
+   -- name: GetUserByEmail :one
+   SELECT * FROM users WHERE email = ?;
+   ```
+
+2. **Regenerate code**:
+   ```bash
+   sqlc generate
+   ```
+
+3. **Use in your code**:
+   ```go
+   user, err := queries.GetUserByEmail(ctx, "user@example.com")
+   ```
+
+### Query annotations
+
+- `:one` - Returns a single row (error if not found)
+- `:many` - Returns multiple rows (slice)
+- `:exec` - Executes without returning data
+- `:execrows` - Returns number of affected rows
+
+### Nullable fields
+
+Use `sqlc.narg()` for optional parameters:
+```sql
+-- name: UpdateUser :exec
+UPDATE users
+SET name = COALESCE(sqlc.narg('name'), name),
+    age = COALESCE(sqlc.narg('age'), age)
+WHERE id = ?;
+```
 
 ## Documentation
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed documentation.
+- [examples/README_TRANSACTIONS.md](examples/README_TRANSACTIONS.md) - Detailed transaction guide
+- [sqlc documentation](https://docs.sqlc.dev/) - sqlc reference
+- [Kong CLI documentation](https://github.com/alecthomas/kong) - CLI framework reference
