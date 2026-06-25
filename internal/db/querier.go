@@ -11,6 +11,9 @@ import (
 type Querier interface {
 	CheckCourseExists(ctx context.Context, id int64) (int64, error)
 	CheckUserExists(ctx context.Context, id int64) (int64, error)
+	CountCourses(ctx context.Context) (int64, error)
+	CountEnrollments(ctx context.Context) (int64, error)
+	CountUsers(ctx context.Context) (int64, error)
 	CreateCourse(ctx context.Context, arg CreateCourseParams) (Course, error)
 	CreateEnrollment(ctx context.Context, arg CreateEnrollmentParams) (Enrollment, error)
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
@@ -24,11 +27,11 @@ type Querier interface {
 	GetEnrollmentByUserAndCourse(ctx context.Context, arg GetEnrollmentByUserAndCourseParams) (Enrollment, error)
 	GetUser(ctx context.Context, id int64) (User, error)
 	GetUserByEmail(ctx context.Context, email string) (User, error)
-	ListCourses(ctx context.Context) ([]Course, error)
-	ListEnrollments(ctx context.Context) ([]ListEnrollmentsRow, error)
+	ListCourses(ctx context.Context, arg ListCoursesParams) ([]Course, error)
+	ListEnrollments(ctx context.Context, arg ListEnrollmentsParams) ([]ListEnrollmentsRow, error)
 	ListEnrollmentsByCourse(ctx context.Context, courseID int64) ([]ListEnrollmentsByCourseRow, error)
 	ListEnrollmentsByUser(ctx context.Context, userID int64) ([]ListEnrollmentsByUserRow, error)
-	ListUsers(ctx context.Context) ([]User, error)
+	ListUsers(ctx context.Context, arg ListUsersParams) ([]User, error)
 	UpdateCourse(ctx context.Context, arg UpdateCourseParams) error
 	UpdateEnrollmentStatus(ctx context.Context, arg UpdateEnrollmentStatusParams) error
 	UpdateUser(ctx context.Context, arg UpdateUserParams) error

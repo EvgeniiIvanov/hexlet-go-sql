@@ -60,10 +60,16 @@ func (cmd *CourseAddCmd) Run(ctx context.Context, queries *db.Queries) error {
 	return printJSON(models.FromDBCourse(course))
 }
 
-type CourseListCmd struct{}
+type CourseListCmd struct {
+	Limit  int64 `short:"l" help:"Number of courses to return" default:"10"`
+	Offset int64 `short:"o" help:"Offset for pagination" default:"0"`
+}
 
 func (cmd *CourseListCmd) Run(ctx context.Context, queries *db.Queries) error {
-	courses, err := queries.ListCourses(ctx)
+	courses, err := queries.ListCourses(ctx, db.ListCoursesParams{
+		Limit:  cmd.Limit,
+		Offset: cmd.Offset,
+	})
 	if err != nil {
 		return fmt.Errorf("list courses: %w", err)
 	}
@@ -175,10 +181,16 @@ func (cmd *UserAddCmd) Run(ctx context.Context, queries *db.Queries) error {
 	return printJSON(models.FromDBUser(user))
 }
 
-type UserListCmd struct{}
+type UserListCmd struct {
+	Limit  int64 `short:"l" help:"Number of users to return" default:"10"`
+	Offset int64 `short:"o" help:"Offset for pagination" default:"0"`
+}
 
 func (cmd *UserListCmd) Run(ctx context.Context, queries *db.Queries) error {
-	users, err := queries.ListUsers(ctx)
+	users, err := queries.ListUsers(ctx, db.ListUsersParams{
+		Limit:  cmd.Limit,
+		Offset: cmd.Offset,
+	})
 	if err != nil {
 		return fmt.Errorf("list users: %w", err)
 	}
@@ -315,10 +327,16 @@ func (cmd *EnrollmentCompleteCmd) Run(ctx context.Context, repo *repository.Repo
 	return printJSON(result)
 }
 
-type EnrollmentListCmd struct{}
+type EnrollmentListCmd struct {
+	Limit  int64 `short:"l" help:"Number of enrollments to return" default:"10"`
+	Offset int64 `short:"o" help:"Offset for pagination" default:"0"`
+}
 
 func (cmd *EnrollmentListCmd) Run(ctx context.Context, queries *db.Queries) error {
-	enrollments, err := queries.ListEnrollments(ctx)
+	enrollments, err := queries.ListEnrollments(ctx, db.ListEnrollmentsParams{
+		Limit:  cmd.Limit,
+		Offset: cmd.Offset,
+	})
 	if err != nil {
 		return fmt.Errorf("list enrollments: %w", err)
 	}

@@ -62,6 +62,8 @@ This will regenerate the type-safe Go code in `internal/db/`.
 **List Courses:**
 ```bash
 ./bin/gosql course-list
+./bin/gosql course-list -l 5 -o 0   # First 5 courses
+./bin/gosql course-list -l 5 -o 5   # Next 5 courses (pagination)
 ```
 
 **Find Courses by IDs:**
@@ -95,6 +97,8 @@ Note: `name` and `age` are omitted from JSON output when NULL.
 **List All Users:**
 ```bash
 ./bin/gosql user-list
+./bin/gosql user-list -l 20 -o 0   # First 20 users
+./bin/gosql user-list -l 20 -o 20  # Next 20 users (pagination)
 ```
 
 **Get User by ID:**
@@ -129,6 +133,7 @@ This uses a transaction to:
 **List All Enrollments:**
 ```bash
 ./bin/gosql enrollment-list
+./bin/gosql enrollment-list -l 10 -o 0  # First 10 enrollments
 ```
 
 **List Enrollments by User:**
@@ -260,9 +265,15 @@ Example output:
 │   └── 001_schema.sql           # Database schema definition
 │
 ├── query/
-│   ├── courses.sql              # SQL queries for courses
-│   ├── users.sql                # SQL queries for users
-│   └── enrollments.sql          # SQL queries for enrollments
+│   ├── courses/
+│   │   ├── courses_read.sql     # Read queries (SELECT)
+│   │   └── courses_write.sql    # Write queries (INSERT, UPDATE, DELETE)
+│   ├── users/
+│   │   ├── users_read.sql       # Read queries (SELECT)
+│   │   └── users_write.sql      # Write queries (INSERT, UPDATE, DELETE)
+│   └── enrollments/
+│       ├── enrollments_read.sql # Read queries (SELECT)
+│       └── enrollments_write.sql # Write queries (INSERT, UPDATE)
 │
 ├── examples/
 │   ├── enrollment_demo.sh       # Transaction demo script
@@ -401,10 +412,17 @@ func (r *Repository) EnrollUser(ctx context.Context, userID, courseID int64) (db
 
 ## Quick Reference
 
+### Query organization
+
+Queries are organized by entity and operation type:
+- **Read queries** (`*_read.sql`) - SELECT operations, includes pagination
+- **Write queries** (`*_write.sql`) - INSERT, UPDATE, DELETE operations
+
 ### Adding a new SQL query
 
-1. **Add query to appropriate file** in `query/` directory:
+1. **Add query to appropriate file** in `query/<entity>/` directory:
    ```sql
+   -- In query/users/users_read.sql
    -- name: GetUserByEmail :one
    SELECT * FROM users WHERE email = ?;
    ```
@@ -418,6 +436,25 @@ func (r *Repository) EnrollUser(ctx context.Context, userID, courseID int64) (db
    ```go
    user, err := queries.GetUserByEmail(ctx, "user@example.com")
    ```
+
+### Pagination
+
+All list queries support pagination with `LIMIT` and `OFFSET`:
+```sql
+-- name: ListUsers :many
+SELECT id, email, name, age, created_at
+FROM users
+ORDER BY created_at DESC
+LIMIT ? OFFSET ?;
+```
+
+Generated code:
+```go
+users, err := queries.ListUsers(ctx, db.ListUsersParams{
+    Limit:  10,
+    Offset: 0,
+})
+```
 
 ### Query annotations
 

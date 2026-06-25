@@ -1,8 +1,3 @@
--- name: CreateEnrollment :one
-INSERT INTO enrollments (user_id, course_id, status)
-VALUES (?, ?, ?)
-RETURNING *;
-
 -- name: GetEnrollment :one
 SELECT * FROM enrollments
 WHERE id = ?;
@@ -25,7 +20,8 @@ SELECT
 FROM enrollments e
 JOIN users u ON e.user_id = u.id
 JOIN courses c ON e.course_id = c.id
-ORDER BY e.enrolled_at DESC;
+ORDER BY e.enrolled_at DESC
+LIMIT ? OFFSET ?;
 
 -- name: ListEnrollmentsByUser :many
 SELECT 
@@ -61,10 +57,8 @@ JOIN courses c ON e.course_id = c.id
 WHERE e.course_id = ?
 ORDER BY e.enrolled_at DESC;
 
--- name: UpdateEnrollmentStatus :exec
-UPDATE enrollments
-SET status = ?
-WHERE user_id = ? AND course_id = ? AND status = 'active';
+-- name: CountEnrollments :one
+SELECT COUNT(*) FROM enrollments;
 
 -- name: CheckUserExists :one
 SELECT 1 FROM users WHERE id = ?;
