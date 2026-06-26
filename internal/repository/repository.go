@@ -24,8 +24,24 @@ func New(database *sql.DB) *Repository {
 	}
 }
 
+// NewWithQueries creates a new repository with provided queries
+// This is useful for integration tests where you want to use a transaction
+func NewWithQueries(queries *db.Queries) *Repository {
+	return &Repository{
+		db:      nil, // db is nil when using existing queries/transaction
+		queries: queries,
+	}
+}
+
 // withTx executes a function within a database transaction
 func (r *Repository) withTx(ctx context.Context, fn func(*db.Queries) error) error {
+	// If db is nil, we're already in a transaction (using NewWithQueries)
+	// In this case, just execute the function with the existing queries
+	if r.db == nil {
+		return fn(r.queries)
+	}
+
+	// Otherwise, create a new transaction
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)

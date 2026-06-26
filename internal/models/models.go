@@ -81,6 +81,7 @@ type Enrollment struct {
 	CourseID   int64     `json:"course_id"`
 	EnrolledAt time.Time `json:"enrolled_at"`
 	Status     string    `json:"status"`
+	OrderID    *int64    `json:"order_id,omitempty"`
 }
 
 // FromDBEnrollment converts sqlc Enrollment to our Enrollment model
@@ -94,6 +95,10 @@ func FromDBEnrollment(e db.Enrollment) Enrollment {
 
 	if e.EnrolledAt.Valid {
 		model.EnrolledAt = e.EnrolledAt.Time
+	}
+
+	if e.OrderID.Valid {
+		model.OrderID = &e.OrderID.Int64
 	}
 
 	return model
