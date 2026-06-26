@@ -827,6 +827,7 @@ COALESCE(c.title, '') as course_title
 
 ## Documentation
 
+- [docs/EXPORTING_PACKAGES.md](docs/EXPORTING_PACKAGES.md) - Guide for using as a library
 - [examples/README_TRANSACTIONS.md](examples/README_TRANSACTIONS.md) - Detailed transaction guide
 - [sqlc documentation](https://docs.sqlc.dev/) - sqlc reference
 - [Kong CLI documentation](https://github.com/alecthomas/kong) - CLI framework reference
@@ -872,6 +873,28 @@ All foreign keys are indexed for performance:
 - `idx_order_items_order_id`, `idx_order_items_course_id`
 - `idx_enrollments_order_id`
 
+## TODO
+
+- [x] Add MIT License file
+- [ ] Export packages for use as a library
+  - [ ] Export `internal/service` as `pkg/service` (public API)
+  - [ ] Export `internal/models` as `pkg/models` (public types)
+  - [ ] Export `internal/repository` as `pkg/repository` (optional, advanced usage)
+  - [ ] Keep `internal/db` internal (sqlc-generated code)
+- [ ] Add proper versioning (semantic versioning)
+- [ ] Add GitHub Actions CI/CD
+  - [ ] Run tests
+  - [ ] Check `sqlc generate` is up to date
+  - [ ] Lint Go code
+- [ ] Add unit tests for service layer
+- [ ] Add integration tests for repository layer
+- [ ] Add example usage as a library (not just CLI)
+- [ ] Document public API with godoc comments
+- [ ] Add migration tracking system (instead of running all migrations every time)
+- [ ] Add order cancellation/refund with enrollment revocation
+- [ ] Add course revenue analytics queries
+- [ ] Add user purchase history export
+
 ## License
 
-MIT
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
