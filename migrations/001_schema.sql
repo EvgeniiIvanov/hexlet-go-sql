@@ -22,7 +22,9 @@ CREATE TABLE IF NOT EXISTS enrollments (
     course_id INTEGER NOT NULL,
     enrolled_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     status TEXT NOT NULL DEFAULT 'active',
+    order_id INTEGER,  -- Reference to orders table (NULL for free enrollments)
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
     FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
+    FOREIGN KEY (order_id) REFERENCES orders(id),
     UNIQUE(user_id, course_id)
 );

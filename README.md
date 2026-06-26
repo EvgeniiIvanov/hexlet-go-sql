@@ -1,18 +1,23 @@
 # Go SQL CLI Tool
 
-A command-line interface for managing SQLite databases with support for courses, users, and enrollments. Built with **sqlc** for type-safe SQL queries.
+A command-line interface for managing an **e-learning platform** with SQLite. Supports courses, users, enrollments, and a complete **order/payment system**. Built with **sqlc** for type-safe SQL queries and following **Clean Architecture** principles.
 
 ## Features
 
+- **E-Commerce System**: Complete order management with purchase tracking and enrollments
 - **sqlc**: Type-safe SQL queries generated from SQL files
-- **Repository Pattern**: Clean separation of data access logic
+- **Clean Architecture**: Service → Repository → Database layer separation
+- **Domain Error Handling**: Custom errors (`ErrNotFound`, `ErrConflict`) with clear messages
+- **JSON Aggregation**: Uses `json_group_array()` for efficient nested data queries
 - **JSON Output**: All commands output structured JSON
-- **Nullable Fields**: Proper handling of optional database fields
+- **Nullable Fields**: Proper handling of optional database fields with pointer types
 - **Type Safety**: Strong typing with Go structs and sqlc-generated code
 - **Kong CLI**: Modern command-line parsing with auto-generated help
 - **Prepared Statements**: Bulk operations using prepared statements for performance
 - **Upsert Support**: Insert or update (ON CONFLICT) for both courses and users
-- **Transactions**: Atomic operations with rollback support for data integrity
+- **Transactions**: Atomic multi-step operations (order creation, enrollments)
+- **Pagination**: All list operations support LIMIT/OFFSET
+- **Defensive Queries**: LEFT JOIN queries handle orphaned data gracefully
 
 ## Requirements
 
@@ -156,6 +161,108 @@ This uses a transaction to:
 ./bin/gosql enrollment-cancel -u 1 -c 1
 ```
 
+### Order Commands (E-Commerce)
+
+**Create an Order (Purchase Courses):**
+```bash
+# Purchase a single course
+./bin/gosql order-create -u 1 -c 1 -p card
+
+# Purchase multiple courses in one order
+./bin/gosql order-create -u 1 -c 1 -c 2 -c 3 -p paypal
+```
+
+This uses a **transaction** to atomically:
+1. Verify user and all courses exist
+2. Calculate total amount from course prices
+3. Create ORDER record (pending → completed)
+4. Create ORDER_ITEMS for each course (with historical prices)
+5. Create ENROLLMENTS for each course (linked to order)
+6. Rollback if ANY step fails
+
+Output:
+```json
+{
+  "id": 1,
+  "user_id": 1,
+  "total_amount": 24998,
+  "status": "completed",
+  "payment_method": "card",
+  "created_at": "2026-06-26T10:19:55Z"
+}
+```
+
+**Get Order Details:**
+```bash
+./bin/gosql order-get 1
+```
+
+Shows order with all purchased courses (using `json_group_array`):
+```json
+{
+  "id": 1,
+  "total_amount": 24998,
+  "items": [
+    {"course_title": "Go Programming", "price": 9999},
+    {"course_title": "Rust Programming", "price": 14999}
+  ]
+}
+```
+
+**List All Orders:**
+```bash
+./bin/gosql order-list
+./bin/gosql order-list -l 10 -o 0  # Pagination
+```
+
+**Get User's Order History:**
+```bash
+./bin/gosql orders-by-user -u 1
+```
+
+**Check Course Access/Ownership:**
+```bash
+./bin/gosql check-course-access -u 1 -c 1
+```
+
+Output:
+```json
+{
+  "user_id": 1,
+  "course_id": 1,
+  "has_access": true
+}
+```
+
+**Refund an Order:**
+```bash
+./bin/gosql order-refund 1
+```
+
+### Advanced Queries
+
+**Get Course with All Enrollments (JSON aggregation):**
+```bash
+./bin/gosql course-with-enrollments 1
+```
+
+Output shows course with nested enrollment data:
+```json
+{
+  "id": 1,
+  "slug": "go-101",
+  "title": "Go Programming",
+  "price": 9999,
+  "enrollments": [
+    {
+      "user_email": "alice@example.com",
+      "enrolled_at": "2026-06-26 10:08:37",
+      "status": "active"
+    }
+  ]
+}
+```
+
 ## Demo Scripts
 
 ### Transaction Demo
@@ -245,35 +352,48 @@ Example output:
 │
 ├── internal/
 │   ├── database/
-│   │   └── database.go          # Database connection and schema initialization
+│   │   └── database.go          # Database connection and migrations
 │   │
 │   ├── db/                      # sqlc-generated code (DO NOT EDIT MANUALLY)
 │   │   ├── db.go                # Database interface and Queries struct
-│   │   ├── models.go            # Auto-generated models from schema
+│   │   ├── models.go            # Auto-generated models (Order, OrderItem, etc.)
 │   │   ├── querier.go           # Interface for all queries
-│   │   ├── courses.sql.go       # Generated course queries
-│   │   ├── users.sql.go         # Generated user queries
-│   │   └── enrollments.sql.go  # Generated enrollment queries
+│   │   ├── courses_read.sql.go  # Generated course read queries
+│   │   ├── courses_write.sql.go # Generated course write queries
+│   │   ├── users_read.sql.go    # Generated user read queries
+│   │   ├── users_write.sql.go   # Generated user write queries
+│   │   ├── enrollments_read.sql.go  # Generated enrollment read queries
+│   │   ├── enrollments_write.sql.go # Generated enrollment write queries
+│   │   ├── orders_read.sql.go   # Generated order read queries
+│   │   └── orders_write.sql.go  # Generated order write queries
 │   │
 │   ├── models/
-│   │   └── models.go            # JSON-friendly model converters
+│   │   └── models.go            # JSON-friendly model converters (sql.Null* → pointers)
 │   │
-│   └── repository/
-│       └── repository.go        # Transaction wrapper and business logic
+│   ├── repository/
+│   │   ├── errors.go            # Domain errors (ErrNotFound, ErrConflict)
+│   │   └── repository.go        # Data access layer with error mapping
+│   │
+│   └── service/
+│       └── service.go           # Business logic layer
 │
 ├── migrations/
-│   └── 001_schema.sql           # Database schema definition
+│   ├── 001_schema.sql           # Core schema (users, courses, enrollments)
+│   └── 002_add_orders.sql       # Order system (orders, order_items, indexes)
 │
 ├── query/
 │   ├── courses/
-│   │   ├── courses_read.sql     # Read queries (SELECT)
+│   │   ├── courses_read.sql     # Read queries (SELECT, json_group_array)
 │   │   └── courses_write.sql    # Write queries (INSERT, UPDATE, DELETE)
 │   ├── users/
-│   │   ├── users_read.sql       # Read queries (SELECT)
+│   │   ├── users_read.sql       # Read queries (SELECT, pagination)
 │   │   └── users_write.sql      # Write queries (INSERT, UPDATE, DELETE)
-│   └── enrollments/
-│       ├── enrollments_read.sql # Read queries (SELECT)
-│       └── enrollments_write.sql # Write queries (INSERT, UPDATE)
+│   ├── enrollments/
+│   │   ├── enrollments_read.sql # Read queries (SELECT with LEFT JOIN)
+│   │   └── enrollments_write.sql # Write queries (INSERT, UPDATE)
+│   └── orders/
+│       ├── orders_read.sql      # Read queries (SELECT with json_group_array)
+│       └── orders_write.sql     # Write queries (INSERT, UPDATE)
 │
 ├── examples/
 │   ├── enrollment_demo.sh       # Transaction demo script
@@ -510,7 +630,92 @@ func (r *Repository) EnrollUser(ctx context.Context, userID, courseID int64) (db
 - No partial state (isolation)
 - Changes are permanent once committed (durability)
 
+### Order System Architecture
+
+The order system implements a complete e-commerce flow with transactional guarantees:
+
+**Database Schema:**
+```
+orders
+  ├── id, user_id, total_amount, status, payment_method
+  └── timestamps (created_at, completed_at)
+
+order_items
+  ├── id, order_id, course_id, price
+  └── Historical price tracking (price at time of purchase)
+
+enrollments
+  ├── ... (existing fields)
+  └── order_id  -- Links enrollment to purchase (NULL for free courses)
+```
+
+**Purchase Flow (Single Transaction):**
+```go
+func CreateOrderWithEnrollments(ctx, userID, courseIDs, paymentMethod) {
+    BEGIN TRANSACTION
+        1. Verify user exists (fail fast)
+        2. Get all course prices & verify courses exist
+        3. Calculate total_amount
+        4. CREATE order (status='pending')
+        5. CREATE order_items (one per course, with historical price)
+        6. UPDATE order (status='completed')
+        7. CREATE enrollments (one per course, linked to order_id)
+    COMMIT  -- All or nothing!
+}
+```
+
+**Key Benefits:**
+- **Atomic purchases**: User gets all courses or none (no partial orders)
+- **Price history**: Track what price was paid (even if course price changes)
+- **Audit trail**: Every enrollment links back to its order
+- **Idempotent**: UNIQUE constraint prevents duplicate course purchases
+- **Defensive**: LEFT JOIN handles deleted courses gracefully
+
+**JSON Aggregation:**
+Uses SQLite's `json_group_array()` to efficiently return nested data:
+```sql
+SELECT
+    o.id, o.total_amount,
+    json_group_array(json_object(
+        'course_title', c.title,
+        'price', oi.price
+    )) as items
+FROM orders o
+LEFT JOIN order_items oi ON oi.order_id = o.id
+LEFT JOIN courses c ON c.id = oi.course_id
+GROUP BY o.id;
+```
+
+Result: Single query returns order with all purchased courses as JSON array.
+
 ## Quick Reference
+
+### Price Handling
+
+All prices are stored as **integers in cents** to avoid floating-point precision issues:
+
+```bash
+# $99.99 is stored as 9999 cents
+./bin/gosql course-add -s "go-101" -t "Go Course" -p 9999
+
+# Output shows:
+{
+  "price": 9999  # = $99.99
+}
+```
+
+**Why cents?**
+- ✅ No floating-point rounding errors
+- ✅ Standard practice in payment systems (Stripe, PayPal, etc.)
+- ✅ Integer arithmetic is exact and fast
+- ✅ Easy conversion: `dollars = cents / 100`
+
+**Example:**
+```go
+// In your application
+coursePriceCents := 9999  // $99.99
+orderTotal := course1Price + course2Price  // 9999 + 14999 = 24998 ($249.98)
+```
 
 ### Query organization
 
@@ -574,8 +779,99 @@ SET name = COALESCE(sqlc.narg('name'), name),
 WHERE id = ?;
 ```
 
+### Defensive Programming
+
+**LEFT JOIN for orphaned data:**
+```sql
+-- Won't fail if course is deleted
+SELECT e.*, COALESCE(c.title, '') as course_title
+FROM enrollments e
+LEFT JOIN courses c ON e.course_id = c.id;
+```
+
+**COALESCE for non-nullable columns:**
+```sql
+-- Prevents NULL in required fields
+COALESCE(c.slug, '') as course_slug,
+COALESCE(c.title, '') as course_title
+```
+
+**Result:**
+- ✅ Queries don't break if foreign key references are missing
+- ✅ Shows enrollments with empty strings instead of hiding records
+- ✅ Easy to identify and fix data integrity issues
+
+## Best Practices
+
+### When to use what:
+
+**Use `json_group_array()`:**
+- When returning parent entity with all children (one-to-many)
+- Example: Get course with all enrolled students
+- Benefit: Single query, no N+1 problem
+
+**Use regular JOINs:**
+- When filtering or paginating child records
+- Example: List enrollments with pagination
+- Benefit: More flexible filtering
+
+**Use transactions:**
+- When multiple database operations must succeed together
+- Example: Create order + order items + enrollments
+- Benefit: Atomicity, all or nothing
+
+**Prices in cents:**
+- Always store monetary values as integers in cents
+- Example: $99.99 = 9999
+- Benefit: No floating-point precision errors
+
 ## Documentation
 
 - [examples/README_TRANSACTIONS.md](examples/README_TRANSACTIONS.md) - Detailed transaction guide
 - [sqlc documentation](https://docs.sqlc.dev/) - sqlc reference
 - [Kong CLI documentation](https://github.com/alecthomas/kong) - CLI framework reference
+
+## Database Schema
+
+### Core Tables
+
+**users** - User accounts
+- `id`, `email` (UNIQUE), `name`, `age`, `created_at`
+
+**courses** - Available courses
+- `id`, `slug` (UNIQUE), `title`, `price` (in cents)
+
+**enrollments** - User course access
+- `id`, `user_id`, `course_id`, `enrolled_at`, `status`, `order_id`
+- UNIQUE constraint on (user_id, course_id)
+
+**orders** - Purchase records
+- `id`, `user_id`, `total_amount` (in cents), `status`, `payment_method`
+- Status: pending, completed, failed, refunded
+
+**order_items** - Items in each order
+- `id`, `order_id`, `course_id`, `price` (historical)
+- UNIQUE constraint on (order_id, course_id)
+
+### Relationships
+
+```
+users
+  ├─→ orders (one-to-many)
+  │     └─→ order_items (one-to-many)
+  │           └─→ courses (many-to-one)
+  └─→ enrollments (one-to-many)
+        ├─→ courses (many-to-one)
+        └─→ orders (many-to-one, optional)
+```
+
+### Indexes
+
+All foreign keys are indexed for performance:
+- `idx_orders_user_id`, `idx_orders_status`
+- `idx_order_items_order_id`, `idx_order_items_course_id`
+- `idx_enrollments_order_id`
+
+## License
+
+MIT

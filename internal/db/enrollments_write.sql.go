@@ -7,22 +7,29 @@ package db
 
 import (
 	"context"
+	"database/sql"
 )
 
 const createEnrollment = `-- name: CreateEnrollment :one
-INSERT INTO enrollments (user_id, course_id, status)
-VALUES (?, ?, ?)
-RETURNING id, user_id, course_id, enrolled_at, status
+INSERT INTO enrollments (user_id, course_id, status, order_id)
+VALUES (?, ?, ?, ?)
+RETURNING id, user_id, course_id, enrolled_at, status, order_id
 `
 
 type CreateEnrollmentParams struct {
-	UserID   int64  `json:"user_id"`
-	CourseID int64  `json:"course_id"`
-	Status   string `json:"status"`
+	UserID   int64         `json:"user_id"`
+	CourseID int64         `json:"course_id"`
+	Status   string        `json:"status"`
+	OrderID  sql.NullInt64 `json:"order_id"`
 }
 
 func (q *Queries) CreateEnrollment(ctx context.Context, arg CreateEnrollmentParams) (Enrollment, error) {
-	row := q.db.QueryRowContext(ctx, createEnrollment, arg.UserID, arg.CourseID, arg.Status)
+	row := q.db.QueryRowContext(ctx, createEnrollment,
+		arg.UserID,
+		arg.CourseID,
+		arg.Status,
+		arg.OrderID,
+	)
 	var i Enrollment
 	err := row.Scan(
 		&i.ID,
@@ -30,6 +37,7 @@ func (q *Queries) CreateEnrollment(ctx context.Context, arg CreateEnrollmentPara
 		&i.CourseID,
 		&i.EnrolledAt,
 		&i.Status,
+		&i.OrderID,
 	)
 	return i, err
 }

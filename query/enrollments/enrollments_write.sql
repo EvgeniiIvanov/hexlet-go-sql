@@ -1,6 +1,6 @@
 -- name: CreateEnrollment :one
-INSERT INTO enrollments (user_id, course_id, status)
-VALUES (?, ?, ?)
+INSERT INTO enrollments (user_id, course_id, status, order_id)
+VALUES (?, ?, ?, ?)
 RETURNING *;
 
 -- name: UpdateEnrollmentStatus :exec

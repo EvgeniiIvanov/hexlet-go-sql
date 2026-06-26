@@ -71,6 +71,17 @@ func (s *Service) DeleteCourse(ctx context.Context, id int64) error {
 	return nil
 }
 
+func (s *Service) GetCourseWithEnrollments(ctx context.Context, id int64) (models.CourseWithEnrollments, error) {
+	row, err := s.repo.GetCourseWithEnrollments(ctx, id)
+	if err != nil {
+		if repository.IsNotFound(err) {
+			return models.CourseWithEnrollments{}, fmt.Errorf("course with id %d not found", id)
+		}
+		return models.CourseWithEnrollments{}, fmt.Errorf("failed to get course with enrollments: %w", err)
+	}
+	return models.FromDBGetCourseWithEnrollmentsRow(row)
+}
+
 // User operations
 
 func (s *Service) CreateUser(ctx context.Context, email string, name sql.NullString, age sql.NullInt64) (models.User, error) {
@@ -184,4 +195,77 @@ func (s *Service) BulkUpsertCourses(ctx context.Context, courses []db.UpsertCour
 
 func (s *Service) BulkUpsertUsers(ctx context.Context, users []db.UpsertUserParams) error {
 	return s.repo.BulkUpsertUsers(ctx, users)
+}
+
+// Order operations
+
+func (s *Service) CreateOrder(ctx context.Context, userID int64, courseIDs []int64, paymentMethod string) (models.Order, error) {
+	order, err := s.repo.CreateOrderWithEnrollments(ctx, userID, courseIDs, paymentMethod)
+	if err != nil {
+		if repository.IsNotFound(err) {
+			return models.Order{}, fmt.Errorf("user or one of the courses not found")
+		}
+		if repository.IsConflict(err) {
+			return models.Order{}, fmt.Errorf("user is already enrolled in one of the courses")
+		}
+		return models.Order{}, fmt.Errorf("failed to create order: %w", err)
+	}
+	return models.FromDBOrder(order), nil
+}
+
+func (s *Service) GetOrder(ctx context.Context, id int64) (models.Order, error) {
+	order, err := s.repo.GetOrder(ctx, id)
+	if err != nil {
+		if repository.IsNotFound(err) {
+			return models.Order{}, fmt.Errorf("order with id %d not found", id)
+		}
+		return models.Order{}, fmt.Errorf("failed to get order: %w", err)
+	}
+	return models.FromDBOrder(order), nil
+}
+
+func (s *Service) GetOrderWithItems(ctx context.Context, id int64) (models.OrderWithItems, error) {
+	order, err := s.repo.GetOrderWithItems(ctx, id)
+	if err != nil {
+		if repository.IsNotFound(err) {
+			return models.OrderWithItems{}, fmt.Errorf("order with id %d not found", id)
+		}
+		return models.OrderWithItems{}, fmt.Errorf("failed to get order: %w", err)
+	}
+	return models.FromDBGetOrderWithItemsRow(order)
+}
+
+func (s *Service) ListOrders(ctx context.Context, limit, offset int64) ([]models.Order, error) {
+	orders, err := s.repo.ListOrders(ctx, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list orders: %w", err)
+	}
+	return models.FromDBOrders(orders), nil
+}
+
+func (s *Service) GetUserOrders(ctx context.Context, userID int64) ([]models.OrderWithItems, error) {
+	orders, err := s.repo.GetUserOrders(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user orders: %w", err)
+	}
+	return models.FromDBGetUserOrdersRows(orders)
+}
+
+func (s *Service) CheckUserOwnsCourse(ctx context.Context, userID, courseID int64) (bool, error) {
+	owns, err := s.repo.CheckUserOwnsCourse(ctx, userID, courseID)
+	if err != nil {
+		return false, fmt.Errorf("failed to check course ownership: %w", err)
+	}
+	return owns, nil
+}
+
+func (s *Service) RefundOrder(ctx context.Context, orderID int64) error {
+	err := s.repo.RefundOrderWithEnrollments(ctx, orderID)
+	if err != nil {
+		if repository.IsNotFound(err) {
+			return fmt.Errorf("order with id %d not found", orderID)
+		}
+		return fmt.Errorf("failed to refund order: %w", err)
+	}
+	return nil
 }

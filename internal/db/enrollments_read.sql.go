@@ -44,7 +44,7 @@ func (q *Queries) CountEnrollments(ctx context.Context) (int64, error) {
 }
 
 const getEnrollment = `-- name: GetEnrollment :one
-SELECT id, user_id, course_id, enrolled_at, status FROM enrollments
+SELECT id, user_id, course_id, enrolled_at, status, order_id FROM enrollments
 WHERE id = ?
 `
 
@@ -57,12 +57,13 @@ func (q *Queries) GetEnrollment(ctx context.Context, id int64) (Enrollment, erro
 		&i.CourseID,
 		&i.EnrolledAt,
 		&i.Status,
+		&i.OrderID,
 	)
 	return i, err
 }
 
 const getEnrollmentByUserAndCourse = `-- name: GetEnrollmentByUserAndCourse :one
-SELECT id, user_id, course_id, enrolled_at, status FROM enrollments
+SELECT id, user_id, course_id, enrolled_at, status, order_id FROM enrollments
 WHERE user_id = ? AND course_id = ?
 `
 
@@ -80,24 +81,25 @@ func (q *Queries) GetEnrollmentByUserAndCourse(ctx context.Context, arg GetEnrol
 		&i.CourseID,
 		&i.EnrolledAt,
 		&i.Status,
+		&i.OrderID,
 	)
 	return i, err
 }
 
 const listEnrollments = `-- name: ListEnrollments :many
-SELECT 
+SELECT
     e.id,
     e.user_id,
     u.email as user_email,
     u.name as user_name,
     e.course_id,
-    c.slug as course_slug,
-    c.title as course_title,
+    COALESCE(c.slug, '') as course_slug,
+    COALESCE(c.title, '') as course_title,
     e.enrolled_at,
     e.status
 FROM enrollments e
 JOIN users u ON e.user_id = u.id
-JOIN courses c ON e.course_id = c.id
+LEFT JOIN courses c ON e.course_id = c.id
 ORDER BY e.enrolled_at DESC
 LIMIT ? OFFSET ?
 `
@@ -153,10 +155,10 @@ func (q *Queries) ListEnrollments(ctx context.Context, arg ListEnrollmentsParams
 }
 
 const listEnrollmentsByCourse = `-- name: ListEnrollmentsByCourse :many
-SELECT 
+SELECT
     e.id,
     e.user_id,
-    u.email as user_email,
+    COALESCE(u.email, '') as user_email,
     u.name as user_name,
     e.course_id,
     c.slug as course_slug,
@@ -164,7 +166,7 @@ SELECT
     e.enrolled_at,
     e.status
 FROM enrollments e
-JOIN users u ON e.user_id = u.id
+LEFT JOIN users u ON e.user_id = u.id
 JOIN courses c ON e.course_id = c.id
 WHERE e.course_id = ?
 ORDER BY e.enrolled_at DESC
@@ -216,19 +218,19 @@ func (q *Queries) ListEnrollmentsByCourse(ctx context.Context, courseID int64) (
 }
 
 const listEnrollmentsByUser = `-- name: ListEnrollmentsByUser :many
-SELECT 
+SELECT
     e.id,
     e.user_id,
     u.email as user_email,
     u.name as user_name,
     e.course_id,
-    c.slug as course_slug,
-    c.title as course_title,
+    COALESCE(c.slug, '') as course_slug,
+    COALESCE(c.title, '') as course_title,
     e.enrolled_at,
     e.status
 FROM enrollments e
 JOIN users u ON e.user_id = u.id
-JOIN courses c ON e.course_id = c.id
+LEFT JOIN courses c ON e.course_id = c.id
 WHERE e.user_id = ?
 ORDER BY e.enrolled_at DESC
 `
