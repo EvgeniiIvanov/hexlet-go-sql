@@ -873,9 +873,65 @@ All foreign keys are indexed for performance:
 - `idx_order_items_order_id`, `idx_order_items_course_id`
 - `idx_enrollments_order_id`
 
+## Testing
+
+This project has comprehensive unit tests for all layers.
+
+### Run all tests:
+```bash
+make test
+```
+
+### Run tests with coverage:
+```bash
+make test-cover
+# Opens coverage.html in browser
+```
+
+### Run specific test suites:
+```bash
+make test-models    # Model conversion tests
+make test-repo      # Repository/data access tests
+make test-service   # Service/business logic tests
+```
+
+### Test coverage:
+- **Models**: 23.0% - Type conversion functions
+- **Repository**: 53.7% - Data access, transactions, error mapping
+- **Service**: 34.6% - Business logic, error handling
+
+### What's tested:
+
+✅ **Model conversions** - `sql.Null*` to pointer types
+✅ **CRUD operations** - Create, Read, Update, Delete for all entities
+✅ **Error handling** - `ErrNotFound`, `ErrConflict` mapping
+✅ **Transactions** - Order creation with enrollments (atomicity)
+✅ **Pagination** - List operations with LIMIT/OFFSET
+✅ **Duplicate prevention** - UNIQUE constraints
+✅ **Course ownership** - Verify purchase → enrollment flow
+✅ **Friendly error messages** - Service layer user-facing errors
+
+### Test structure:
+
+```
+internal/
+├── testutil/
+│   └── testutil.go           # Test helpers (in-memory DB, seed data)
+├── models/
+│   └── models_test.go        # 5 tests
+├── repository/
+│   └── repository_test.go    # 22 tests
+└── service/
+    └── service_test.go       # 17 tests
+```
+
+All tests use **in-memory SQLite** for speed and isolation.
+
 ## TODO
 
 - [x] Add MIT License file
+- [x] Add unit tests for service layer
+- [x] Add integration tests for repository layer
 - [ ] Export packages for use as a library
   - [ ] Export `internal/service` as `pkg/service` (public API)
   - [ ] Export `internal/models` as `pkg/models` (public types)
@@ -886,8 +942,6 @@ All foreign keys are indexed for performance:
   - [ ] Run tests
   - [ ] Check `sqlc generate` is up to date
   - [ ] Lint Go code
-- [ ] Add unit tests for service layer
-- [ ] Add integration tests for repository layer
 - [ ] Add example usage as a library (not just CLI)
 - [ ] Document public API with godoc comments
 - [ ] Add migration tracking system (instead of running all migrations every time)
