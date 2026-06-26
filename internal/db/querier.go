@@ -11,6 +11,8 @@ import (
 type Querier interface {
 	CheckCourseExists(ctx context.Context, id int64) (int64, error)
 	CheckUserExists(ctx context.Context, id int64) (int64, error)
+	// Check if user owns a course by looking at enrollments
+	// This includes both purchased courses (with order_id) and free courses (without order_id)
 	CheckUserOwnsCourse(ctx context.Context, arg CheckUserOwnsCourseParams) (bool, error)
 	CompleteOrder(ctx context.Context, id int64) error
 	CountCourses(ctx context.Context) (int64, error)

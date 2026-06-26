@@ -12,12 +12,11 @@ import (
 
 const checkUserOwnsCourse = `-- name: CheckUserOwnsCourse :one
 SELECT EXISTS(
-    SELECT 1 
-    FROM orders o
-    JOIN order_items oi ON oi.order_id = o.id
-    WHERE o.user_id = ? 
-      AND oi.course_id = ?
-      AND o.status = 'completed'
+    SELECT 1
+    FROM enrollments e
+    WHERE e.user_id = ?
+      AND e.course_id = ?
+      AND e.status = 'active'
 ) as owns_course
 `
 
@@ -26,6 +25,8 @@ type CheckUserOwnsCourseParams struct {
 	CourseID int64 `json:"course_id"`
 }
 
+// Check if user owns a course by looking at enrollments
+// This includes both purchased courses (with order_id) and free courses (without order_id)
 func (q *Queries) CheckUserOwnsCourse(ctx context.Context, arg CheckUserOwnsCourseParams) (bool, error) {
 	row := q.db.QueryRowContext(ctx, checkUserOwnsCourse, arg.UserID, arg.CourseID)
 	var owns_course bool

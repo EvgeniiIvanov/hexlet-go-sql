@@ -67,13 +67,14 @@ LEFT JOIN items_data i ON i.order_id = o.id
 WHERE o.id = ?;
 
 -- name: CheckUserOwnsCourse :one
+-- Check if user owns a course by looking at enrollments
+-- This includes both purchased courses (with order_id) and free courses (without order_id)
 SELECT EXISTS(
-    SELECT 1 
-    FROM orders o
-    JOIN order_items oi ON oi.order_id = o.id
-    WHERE o.user_id = ? 
-      AND oi.course_id = ?
-      AND o.status = 'completed'
+    SELECT 1
+    FROM enrollments e
+    WHERE e.user_id = ?
+      AND e.course_id = ?
+      AND e.status = 'active'
 ) as owns_course;
 
 -- name: GetCourseRevenue :one

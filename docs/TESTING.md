@@ -7,15 +7,18 @@ This document describes the testing strategy and how to run tests.
 ```
 internal/
 ├── testutil/
-│   └── testutil.go           # Test utilities and helpers
+│   ├── testutil.go           # Unit test utilities (in-memory DB)
+│   └── integration.go        # Integration test utilities (real DB + transactions)
 ├── models/
 │   └── models_test.go        # Model conversion tests (5 tests)
 ├── repository/
 │   └── repository_test.go    # Repository layer tests (22 tests)
-└── service/
-    └── service_test.go       # Service layer tests (17 tests)
+├── service/
+│   └── service_test.go       # Service layer tests (17 tests)
+└── tests/
+    └── integration_test.go   # Integration tests (8 tests)
 
-Total: 44 unit tests
+Total: 44 unit tests + 8 integration tests = 52 tests
 ```
 
 ## Running Tests
@@ -23,8 +26,14 @@ Total: 44 unit tests
 ### Quick Commands
 
 ```bash
-# Run all tests
+# Run unit tests
 make test
+
+# Run integration tests
+make test-integration
+
+# Run ALL tests (unit + integration)
+make test-all
 
 # Run with verbose output
 make test-verbose
@@ -234,6 +243,83 @@ func TestService_SomeOperation(t *testing.T) {
 }
 ```
 
+## Integration Tests
+
+Integration tests verify the complete flow of operations using real database files and transactions.
+
+### Key Features
+
+1. **Build Tag**: Uses `//go:build integration` to separate from unit tests
+2. **Real Database**: Creates temporary SQLite database files (not in-memory)
+3. **Transaction Rollback**: Each test runs in a transaction that gets rolled back
+4. **Complete Flows**: Tests entire user journeys, not just isolated methods
+
+### Test Scenarios
+
+```
+TestUserCreationAndRetrieval         - Create user → Retrieve by ID
+TestDuplicateEmailError              - Verify constraint enforcement
+TestCoursePurchaseFlow               - User buys course → Gets access
+TestMultipleCoursePurchase           - Buy multiple courses in one order
+TestDuplicateCoursePurchasePrevention - Can't buy same course twice
+TestOrderWithItemsRetrieval          - JSON aggregation works correctly
+TestUserOrdersHistory                - Get all orders for a user
+TestFreeEnrollmentWithoutOrder       - Enroll without payment
+```
+
+### Using WithTxContext Helper
+
+```go
+func TestSomething(t *testing.T) {
+    db := testutil.SetupIntegrationDB(t)
+
+    testutil.WithTxContext(t, db, func(ctx context.Context, tx *sql.Tx) {
+        // Create repository with transaction
+        queries := db.New(tx)
+        repo := repository.NewWithQueries(queries)
+        svc := service.New(repo)
+
+        // Your test code here
+        // All changes are rolled back after test
+    })
+}
+```
+
+### Benefits of Transaction Rollback
+
+✅ **Test Isolation**: No data pollution between tests
+✅ **No Cleanup Needed**: Rollback handles cleanup automatically
+✅ **Safe Concurrent Testing**: Tests don't interfere with each other
+✅ **Fast**: No need to truncate tables or reset sequences
+
+### How It Works
+
+The `WithTxContext` helper:
+1. Begins a transaction
+2. Passes the transaction to your test function
+3. **Always rolls back** the transaction (using defer)
+4. This ensures the database file stays clean
+
+The repository's `NewWithQueries` constructor:
+- Accepts sqlc queries bound to a transaction
+- Detects when `db` is nil (meaning we're in a transaction)
+- Skips creating nested transactions
+
+### When to Use Integration Tests
+
+Use integration tests for:
+- **Multi-table operations** (orders + items + enrollments)
+- **Transaction atomicity** verification
+- **Constraint enforcement** (UNIQUE, FOREIGN KEY)
+- **Complete user flows** (signup → purchase → access)
+- **JSON aggregation queries** (complex JOINs)
+
+Use unit tests for:
+- Business logic validation
+- Error message formatting
+- Model conversions
+- Edge cases with specific inputs
+
 ## Best Practices
 
 1. **Use subtests**: Group related test cases with `t.Run()`
@@ -242,6 +328,7 @@ func TestService_SomeOperation(t *testing.T) {
 4. **Meaningful assertions**: Error messages should explain what's wrong
 5. **Isolate tests**: Each test should be independent
 6. **Use helpers**: DRY principle with `testutil` package
+7. **Tag appropriately**: Use build tags to separate integration tests
 
 ## CI/CD Integration
 
@@ -258,12 +345,17 @@ jobs:
       - uses: actions/setup-go@v4
         with:
           go-version: '1.21'
-      - run: make test-cover
+      - name: Run unit tests
+        run: make test-cover
+      - name: Run integration tests
+        run: make test-integration
       - uses: codecov/codecov-action@v3
 ```
 
 ## Future Improvements
 
+- [x] Add integration tests with transaction rollback
+- [x] Separate unit and integration tests with build tags
 - [ ] Increase coverage to 80%+
 - [ ] Add end-to-end tests for CLI commands
 - [ ] Add benchmark tests for bulk operations

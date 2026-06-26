@@ -875,17 +875,18 @@ All foreign keys are indexed for performance:
 
 ## Testing
 
-This project has comprehensive unit tests for all layers.
+This project has comprehensive **unit tests** and **integration tests**.
 
-### Run all tests:
+### Quick Start:
 ```bash
-make test
+make test              # Unit tests only
+make test-integration  # Integration tests only
+make test-all          # Both unit and integration tests
 ```
 
 ### Run tests with coverage:
 ```bash
-make test-cover
-# Opens coverage.html in browser
+make test-cover  # Generates coverage.html
 ```
 
 ### Run specific test suites:
@@ -895,10 +896,19 @@ make test-repo      # Repository/data access tests
 make test-service   # Service/business logic tests
 ```
 
-### Test coverage:
-- **Models**: 23.0% - Type conversion functions
-- **Repository**: 53.7% - Data access, transactions, error mapping
-- **Service**: 34.6% - Business logic, error handling
+### Test Statistics:
+
+**Unit Tests**: 44 tests
+- **Models**: 23.0% coverage - Type conversion functions
+- **Repository**: 53.7% coverage - Data access, transactions, error mapping
+- **Service**: 34.6% coverage - Business logic, error handling
+
+**Integration Tests**: 8 tests
+- Real database files with transaction rollback
+- Complete end-to-end user flows
+- Build tag: `//go:build integration`
+
+**Total**: 52 tests
 
 ### What's tested:
 
@@ -906,26 +916,34 @@ make test-service   # Service/business logic tests
 ✅ **CRUD operations** - Create, Read, Update, Delete for all entities
 ✅ **Error handling** - `ErrNotFound`, `ErrConflict` mapping
 ✅ **Transactions** - Order creation with enrollments (atomicity)
+✅ **Transaction rollback** - Integration tests clean up automatically
 ✅ **Pagination** - List operations with LIMIT/OFFSET
 ✅ **Duplicate prevention** - UNIQUE constraints
-✅ **Course ownership** - Verify purchase → enrollment flow
+✅ **Course ownership** - Verify purchase → enrollment flow (both paid and free)
 ✅ **Friendly error messages** - Service layer user-facing errors
+✅ **Complete flows** - User signup → course purchase → access verification
 
 ### Test structure:
 
 ```
 internal/
 ├── testutil/
-│   └── testutil.go           # Test helpers (in-memory DB, seed data)
+│   ├── testutil.go           # Unit test helpers (in-memory DB)
+│   └── integration.go        # Integration helpers (real DB + transactions)
 ├── models/
 │   └── models_test.go        # 5 tests
 ├── repository/
 │   └── repository_test.go    # 22 tests
-└── service/
-    └── service_test.go       # 17 tests
+├── service/
+│   └── service_test.go       # 17 tests
+└── tests/
+    └── integration_test.go   # 8 integration tests
 ```
 
-All tests use **in-memory SQLite** for speed and isolation.
+**Unit tests** use in-memory SQLite for speed.
+**Integration tests** use real database files with automatic transaction rollback.
+
+See [docs/TESTING.md](docs/TESTING.md) for detailed testing guide.
 
 ## TODO
 
