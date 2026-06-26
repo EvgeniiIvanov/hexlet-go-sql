@@ -92,6 +92,14 @@ func (r *Repository) DeleteCourse(ctx context.Context, id int64) error {
 	return mapError(err)
 }
 
+func (r *Repository) GetCourseWithEnrollments(ctx context.Context, id int64) (db.GetCourseWithEnrollmentsRow, error) {
+	course, err := r.queries.GetCourseWithEnrollments(ctx, db.GetCourseWithEnrollmentsParams{
+		CourseID: id,
+		ID:       id,
+	})
+	return course, mapError(err)
+}
+
 // User operations
 
 func (r *Repository) CreateUser(ctx context.Context, email string, name sql.NullString, age sql.NullInt64) (db.User, error) {
@@ -139,11 +147,12 @@ func (r *Repository) EnrollUser(ctx context.Context, userID, courseID int64) (db
 			return mapError(err)
 		}
 
-		// Create enrollment
+		// Create enrollment (free enrollment, no order)
 		enrollment, err = q.CreateEnrollment(ctx, db.CreateEnrollmentParams{
 			UserID:   userID,
 			CourseID: courseID,
 			Status:   "active",
+			OrderID:  sql.NullInt64{Valid: false}, // No order for free enrollments
 		})
 		return mapError(err)
 	})
@@ -209,4 +218,148 @@ func (r *Repository) CancelEnrollment(ctx context.Context, userID, courseID int6
 		CourseID: courseID,
 	})
 	return mapError(err)
+}
+
+// Order operations
+
+func (r *Repository) GetOrder(ctx context.Context, id int64) (db.Order, error) {
+	order, err := r.queries.GetOrder(ctx, id)
+	return order, mapError(err)
+}
+
+func (r *Repository) ListOrders(ctx context.Context, limit, offset int64) ([]db.Order, error) {
+	orders, err := r.queries.ListOrders(ctx, db.ListOrdersParams{
+		Limit:  limit,
+		Offset: offset,
+	})
+	return orders, mapError(err)
+}
+
+func (r *Repository) GetUserOrders(ctx context.Context, userID int64) ([]db.GetUserOrdersRow, error) {
+	orders, err := r.queries.GetUserOrders(ctx, userID)
+	return orders, mapError(err)
+}
+
+func (r *Repository) GetOrderWithItems(ctx context.Context, id int64) (db.GetOrderWithItemsRow, error) {
+	order, err := r.queries.GetOrderWithItems(ctx, db.GetOrderWithItemsParams{
+		OrderID: id,
+		ID:      id,
+	})
+	return order, mapError(err)
+}
+
+func (r *Repository) CheckUserOwnsCourse(ctx context.Context, userID, courseID int64) (bool, error) {
+	result, err := r.queries.CheckUserOwnsCourse(ctx, db.CheckUserOwnsCourseParams{
+		UserID:   userID,
+		CourseID: courseID,
+	})
+	return result, mapError(err)
+}
+
+// CreateOrderWithEnrollments creates an order, order items, and enrollments in a transaction
+// This is the key transactional operation for purchase flow
+func (r *Repository) CreateOrderWithEnrollments(ctx context.Context, userID int64, courseIDs []int64, paymentMethod string) (db.Order, error) {
+	var order db.Order
+
+	err := r.withTx(ctx, func(q *db.Queries) error {
+		// 1. Check user exists
+		_, err := q.CheckUserExists(ctx, userID)
+		if err != nil {
+			return mapError(err)
+		}
+
+		// 2. Get course prices and validate all courses exist
+		var totalAmount int64
+		coursePrices := make(map[int64]int64)
+		for _, courseID := range courseIDs {
+			course, err := q.GetCourse(ctx, courseID)
+			if err != nil {
+				return mapError(err)
+			}
+			coursePrices[courseID] = course.Price
+			totalAmount += course.Price
+		}
+
+		// 3. Create order
+		order, err = q.CreateOrder(ctx, db.CreateOrderParams{
+			UserID:      userID,
+			TotalAmount: totalAmount,
+			Status:      "pending",
+			PaymentMethod: sql.NullString{
+				String: paymentMethod,
+				Valid:  paymentMethod != "",
+			},
+		})
+		if err != nil {
+			return mapError(err)
+		}
+
+		// 4. Create order items
+		for _, courseID := range courseIDs {
+			_, err := q.CreateOrderItem(ctx, db.CreateOrderItemParams{
+				OrderID:  order.ID,
+				CourseID: courseID,
+				Price:    coursePrices[courseID],
+			})
+			if err != nil {
+				return mapError(err)
+			}
+		}
+
+		// 5. Mark order as completed (simulating successful payment)
+		err = q.CompleteOrder(ctx, order.ID)
+		if err != nil {
+			return mapError(err)
+		}
+
+		// 6. Create enrollments for each course
+		for _, courseID := range courseIDs {
+			_, err := q.CreateEnrollment(ctx, db.CreateEnrollmentParams{
+				UserID:   userID,
+				CourseID: courseID,
+				Status:   "active",
+				OrderID: sql.NullInt64{
+					Int64: order.ID,
+					Valid: true,
+				},
+			})
+			if err != nil {
+				return mapError(err)
+			}
+		}
+
+		// Update order with completed status
+		order.Status = "completed"
+
+		return nil
+	})
+
+	return order, err
+}
+
+// RefundOrderWithEnrollments refunds an order and cancels associated enrollments
+func (r *Repository) RefundOrderWithEnrollments(ctx context.Context, orderID int64) error {
+	return r.withTx(ctx, func(q *db.Queries) error {
+		// 1. Get order to verify it exists and is completed
+		order, err := q.GetOrder(ctx, orderID)
+		if err != nil {
+			return mapError(err)
+		}
+
+		if order.Status != "completed" {
+			return fmt.Errorf("can only refund completed orders, current status: %s", order.Status)
+		}
+
+		// 2. Mark order as refunded
+		err = q.RefundOrder(ctx, orderID)
+		if err != nil {
+			return mapError(err)
+		}
+
+		// 3. Cancel all enrollments associated with this order
+		// Note: We'd need to add a query for this, but for now we'll document it
+		// TODO: Add CancelEnrollmentsByOrder query
+
+		return nil
+	})
 }

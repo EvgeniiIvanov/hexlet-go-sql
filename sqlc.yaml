@@ -6,6 +6,7 @@ sql:
       - query/users
       - query/courses
       - query/enrollments
+      - query/orders
     gen:
       go:
         package: db

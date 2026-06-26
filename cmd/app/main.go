@@ -21,10 +21,11 @@ import (
 var CLI struct {
 	DBPath string `help:"Path to SQLite database" default:"data.db"`
 
-	CourseAdd        CourseAddCmd        `cmd:"" help:"Add a new course"`
-	CourseList       CourseListCmd       `cmd:"" help:"List courses"`
-	CourseFind       CourseFindCmd       `cmd:"" help:"Find courses by IDs"`
-	CourseBulkUpsert CourseBulkUpsertCmd `cmd:"" help:"Bulk upsert courses from JSON file or stdin"`
+	CourseAdd             CourseAddCmd             `cmd:"" help:"Add a new course"`
+	CourseList            CourseListCmd            `cmd:"" help:"List courses"`
+	CourseFind            CourseFindCmd            `cmd:"" help:"Find courses by IDs"`
+	CourseWithEnrollments CourseWithEnrollmentsCmd `cmd:"" help:"Get a course with all its enrollments"`
+	CourseBulkUpsert      CourseBulkUpsertCmd      `cmd:"" help:"Bulk upsert courses from JSON file or stdin"`
 
 	UserAdd        UserAddCmd        `cmd:"" help:"Add a new user"`
 	UserList       UserListCmd       `cmd:"" help:"List all users"`
@@ -37,6 +38,13 @@ var CLI struct {
 	EnrollmentList     EnrollmentListCmd     `cmd:"" help:"List all enrollments"`
 	EnrollmentByUser   EnrollmentByUserCmd   `cmd:"" help:"List enrollments for a specific user"`
 	EnrollmentByCourse EnrollmentByCourseCmd `cmd:"" help:"List enrollments for a specific course"`
+
+	OrderCreate       OrderCreateCmd       `cmd:"" help:"Create an order and enroll user in courses"`
+	OrderGet          OrderGetCmd          `cmd:"" help:"Get order details with items"`
+	OrderList         OrderListCmd         `cmd:"" help:"List all orders"`
+	OrdersByUser      OrdersByUserCmd      `cmd:"" help:"Get user's order history"`
+	OrderRefund       OrderRefundCmd       `cmd:"" help:"Refund an order"`
+	CheckCourseAccess CheckCourseAccessCmd `cmd:"" help:"Check if user owns a course"`
 }
 
 // Course commands
@@ -81,6 +89,19 @@ func (cmd *CourseFindCmd) Run(ctx context.Context, svc *service.Service) error {
 	}
 
 	return printJSON(courses)
+}
+
+type CourseWithEnrollmentsCmd struct {
+	ID int64 `arg:"" help:"Course ID"`
+}
+
+func (cmd *CourseWithEnrollmentsCmd) Run(ctx context.Context, svc *service.Service) error {
+	course, err := svc.GetCourseWithEnrollments(ctx, cmd.ID)
+	if err != nil {
+		return err
+	}
+
+	return printJSON(course)
 }
 
 type CourseBulkUpsertCmd struct {
@@ -351,6 +372,100 @@ func (cmd *EnrollmentByCourseCmd) Run(ctx context.Context, svc *service.Service)
 	}
 
 	return printJSON(enrollments)
+}
+
+// Order commands
+
+type OrderCreateCmd struct {
+	UserID        int64   `short:"u" help:"User ID" required:""`
+	CourseIDs     []int64 `short:"c" help:"Course IDs to purchase" required:""`
+	PaymentMethod string  `short:"p" help:"Payment method (card, paypal, etc.)" default:"card"`
+}
+
+func (cmd *OrderCreateCmd) Run(ctx context.Context, svc *service.Service) error {
+	order, err := svc.CreateOrder(ctx, cmd.UserID, cmd.CourseIDs, cmd.PaymentMethod)
+	if err != nil {
+		return err
+	}
+
+	return printJSON(order)
+}
+
+type OrderGetCmd struct {
+	ID int64 `arg:"" help:"Order ID"`
+}
+
+func (cmd *OrderGetCmd) Run(ctx context.Context, svc *service.Service) error {
+	order, err := svc.GetOrderWithItems(ctx, cmd.ID)
+	if err != nil {
+		return err
+	}
+
+	return printJSON(order)
+}
+
+type OrderListCmd struct {
+	Limit  int64 `short:"l" help:"Number of orders to return" default:"10"`
+	Offset int64 `short:"o" help:"Offset for pagination" default:"0"`
+}
+
+func (cmd *OrderListCmd) Run(ctx context.Context, svc *service.Service) error {
+	orders, err := svc.ListOrders(ctx, cmd.Limit, cmd.Offset)
+	if err != nil {
+		return err
+	}
+
+	return printJSON(orders)
+}
+
+type OrdersByUserCmd struct {
+	UserID int64 `short:"u" help:"User ID" required:""`
+}
+
+func (cmd *OrdersByUserCmd) Run(ctx context.Context, svc *service.Service) error {
+	orders, err := svc.GetUserOrders(ctx, cmd.UserID)
+	if err != nil {
+		return err
+	}
+
+	return printJSON(orders)
+}
+
+type OrderRefundCmd struct {
+	ID int64 `arg:"" help:"Order ID to refund"`
+}
+
+func (cmd *OrderRefundCmd) Run(ctx context.Context, svc *service.Service) error {
+	if err := svc.RefundOrder(ctx, cmd.ID); err != nil {
+		return err
+	}
+
+	result := map[string]interface{}{
+		"success": true,
+		"message": fmt.Sprintf("Order %d has been refunded", cmd.ID),
+	}
+
+	return printJSON(result)
+}
+
+type CheckCourseAccessCmd struct {
+	UserID   int64 `short:"u" help:"User ID" required:""`
+	CourseID int64 `short:"c" help:"Course ID" required:""`
+}
+
+func (cmd *CheckCourseAccessCmd) Run(ctx context.Context, svc *service.Service) error {
+	owns, err := svc.CheckUserOwnsCourse(ctx, cmd.UserID, cmd.CourseID)
+	if err != nil {
+		return err
+	}
+
+	result := map[string]interface{}{
+		"user_id":    cmd.UserID,
+		"course_id":  cmd.CourseID,
+		"has_access": owns,
+	}
+
+	return printJSON(result)
 }
 
 // Helper functions

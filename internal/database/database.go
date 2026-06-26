@@ -49,15 +49,20 @@ func Connect(ctx context.Context, cfg Config) (*sql.DB, error) {
 
 // InitSchema initializes the database schema by running migrations
 func InitSchema(ctx context.Context, db *sql.DB) error {
-	// Read the migration file
-	data, err := os.ReadFile("migrations/001_schema.sql")
-	if err != nil {
-		return fmt.Errorf("read migration file: %w", err)
+	migrations := []string{
+		"migrations/001_schema.sql",
+		"migrations/002_add_orders.sql",
 	}
 
-	// Execute the migration
-	if _, err := db.ExecContext(ctx, string(data)); err != nil {
-		return fmt.Errorf("execute migration: %w", err)
+	for _, migration := range migrations {
+		data, err := os.ReadFile(migration)
+		if err != nil {
+			return fmt.Errorf("read migration file %s: %w", migration, err)
+		}
+
+		if _, err := db.ExecContext(ctx, string(data)); err != nil {
+			return fmt.Errorf("execute migration %s: %w", migration, err)
+		}
 	}
 
 	return nil

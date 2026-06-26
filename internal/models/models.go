@@ -1,6 +1,7 @@
 package models
 
 import (
+	"encoding/json"
 	"time"
 
 	"example.com/go-sql/internal/db"
@@ -205,4 +206,210 @@ func FromDBListEnrollmentsByCourseRows(rows []db.ListEnrollmentsByCourseRow) []E
 		models[i] = FromDBListEnrollmentsByCourseRow(row)
 	}
 	return models
+}
+
+// EnrollmentData represents a single enrollment in JSON
+type EnrollmentData struct {
+	ID         int64   `json:"id"`
+	UserID     int64   `json:"user_id"`
+	UserEmail  string  `json:"user_email"`
+	UserName   *string `json:"user_name,omitempty"`
+	EnrolledAt string  `json:"enrolled_at"` // Keep as string from SQLite JSON
+	Status     string  `json:"status"`
+}
+
+// CourseWithEnrollments wraps a course with its enrollments as structured data
+type CourseWithEnrollments struct {
+	ID          int64            `json:"id"`
+	Slug        string           `json:"slug"`
+	Title       string           `json:"title"`
+	Price       int64            `json:"price"`
+	Enrollments []EnrollmentData `json:"enrollments"`
+}
+
+// FromDBGetCourseWithEnrollmentsRow converts the sqlc row to a clean model
+func FromDBGetCourseWithEnrollmentsRow(row db.GetCourseWithEnrollmentsRow) (CourseWithEnrollments, error) {
+	model := CourseWithEnrollments{
+		ID:          row.ID,
+		Slug:        row.Slug,
+		Title:       row.Title,
+		Price:       row.Price,
+		Enrollments: []EnrollmentData{},
+	}
+
+	// Parse the JSON enrollments array
+	if row.Enrollments != nil {
+		// The interface{} contains JSON string from SQLite
+		var jsonStr string
+		switch v := row.Enrollments.(type) {
+		case string:
+			jsonStr = v
+		case []byte:
+			jsonStr = string(v)
+		}
+
+		if jsonStr != "" && jsonStr != "[]" {
+			if err := json.Unmarshal([]byte(jsonStr), &model.Enrollments); err != nil {
+				return model, err
+			}
+		}
+	}
+
+	return model, nil
+}
+
+// Order models
+
+type Order struct {
+	ID            int64     `json:"id"`
+	UserID        int64     `json:"user_id"`
+	TotalAmount   int64     `json:"total_amount"` // in cents
+	Status        string    `json:"status"`
+	PaymentMethod *string   `json:"payment_method,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	CompletedAt   *string   `json:"completed_at,omitempty"`
+}
+
+func FromDBOrder(o db.Order) Order {
+	model := Order{
+		ID:          o.ID,
+		UserID:      o.UserID,
+		TotalAmount: o.TotalAmount,
+		Status:      o.Status,
+	}
+
+	if o.PaymentMethod.Valid {
+		model.PaymentMethod = &o.PaymentMethod.String
+	}
+
+	if o.CreatedAt.Valid {
+		model.CreatedAt = o.CreatedAt.Time
+	}
+
+	if o.CompletedAt.Valid {
+		completedAt := o.CompletedAt.Time.Format("2006-01-02 15:04:05")
+		model.CompletedAt = &completedAt
+	}
+
+	return model
+}
+
+func FromDBOrders(orders []db.Order) []Order {
+	models := make([]Order, len(orders))
+	for i, o := range orders {
+		models[i] = FromDBOrder(o)
+	}
+	return models
+}
+
+// OrderItem represents an item in an order
+type OrderItemData struct {
+	ID          int64  `json:"id"`
+	CourseID    int64  `json:"course_id"`
+	CourseSlug  string `json:"course_slug"`
+	CourseTitle string `json:"course_title"`
+	Price       int64  `json:"price"` // in cents
+	CreatedAt   string `json:"created_at,omitempty"`
+}
+
+// OrderWithItems represents an order with its items
+type OrderWithItems struct {
+	ID            int64           `json:"id"`
+	UserID        int64           `json:"user_id"`
+	TotalAmount   int64           `json:"total_amount"` // in cents
+	Status        string          `json:"status"`
+	PaymentMethod *string         `json:"payment_method,omitempty"`
+	CreatedAt     string          `json:"created_at"`
+	CompletedAt   *string         `json:"completed_at,omitempty"`
+	Items         []OrderItemData `json:"items"`
+}
+
+func FromDBGetOrderWithItemsRow(row db.GetOrderWithItemsRow) (OrderWithItems, error) {
+	model := OrderWithItems{
+		ID:          row.ID,
+		UserID:      row.UserID,
+		TotalAmount: row.TotalAmount,
+		Status:      row.Status,
+		Items:       []OrderItemData{},
+	}
+
+	if row.PaymentMethod.Valid {
+		model.PaymentMethod = &row.PaymentMethod.String
+	}
+
+	if row.CreatedAt.Valid {
+		createdAt := row.CreatedAt.Time.Format("2006-01-02 15:04:05")
+		model.CreatedAt = createdAt
+	}
+
+	if row.CompletedAt.Valid {
+		completedAt := row.CompletedAt.Time.Format("2006-01-02 15:04:05")
+		model.CompletedAt = &completedAt
+	}
+
+	// Parse JSON items
+	if row.Items != nil {
+		var jsonStr string
+		switch v := row.Items.(type) {
+		case string:
+			jsonStr = v
+		case []byte:
+			jsonStr = string(v)
+		}
+
+		if jsonStr != "" && jsonStr != "[]" {
+			if err := json.Unmarshal([]byte(jsonStr), &model.Items); err != nil {
+				return model, err
+			}
+		}
+	}
+
+	return model, nil
+}
+
+func FromDBGetUserOrdersRows(rows []db.GetUserOrdersRow) ([]OrderWithItems, error) {
+	models := make([]OrderWithItems, len(rows))
+	for i, row := range rows {
+		model := OrderWithItems{
+			ID:          row.ID,
+			UserID:      row.UserID,
+			TotalAmount: row.TotalAmount,
+			Status:      row.Status,
+			Items:       []OrderItemData{},
+		}
+
+		if row.PaymentMethod.Valid {
+			model.PaymentMethod = &row.PaymentMethod.String
+		}
+
+		if row.CreatedAt.Valid {
+			createdAt := row.CreatedAt.Time.Format("2006-01-02 15:04:05")
+			model.CreatedAt = createdAt
+		}
+
+		if row.CompletedAt.Valid {
+			completedAt := row.CompletedAt.Time.Format("2006-01-02 15:04:05")
+			model.CompletedAt = &completedAt
+		}
+
+		// Parse JSON items
+		if row.Items != nil {
+			var jsonStr string
+			switch v := row.Items.(type) {
+			case string:
+				jsonStr = v
+			case []byte:
+				jsonStr = string(v)
+			}
+
+			if jsonStr != "" && jsonStr != "[]" {
+				if err := json.Unmarshal([]byte(jsonStr), &model.Items); err != nil {
+					return nil, err
+				}
+			}
+		}
+
+		models[i] = model
+	}
+	return models, nil
 }

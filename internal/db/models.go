@@ -16,11 +16,30 @@ type Course struct {
 }
 
 type Enrollment struct {
-	ID         int64        `json:"id"`
-	UserID     int64        `json:"user_id"`
-	CourseID   int64        `json:"course_id"`
-	EnrolledAt sql.NullTime `json:"enrolled_at"`
-	Status     string       `json:"status"`
+	ID         int64         `json:"id"`
+	UserID     int64         `json:"user_id"`
+	CourseID   int64         `json:"course_id"`
+	EnrolledAt sql.NullTime  `json:"enrolled_at"`
+	Status     string        `json:"status"`
+	OrderID    sql.NullInt64 `json:"order_id"`
+}
+
+type Order struct {
+	ID            int64          `json:"id"`
+	UserID        int64          `json:"user_id"`
+	TotalAmount   int64          `json:"total_amount"`
+	Status        string         `json:"status"`
+	PaymentMethod sql.NullString `json:"payment_method"`
+	CreatedAt     sql.NullTime   `json:"created_at"`
+	CompletedAt   sql.NullTime   `json:"completed_at"`
+}
+
+type OrderItem struct {
+	ID        int64        `json:"id"`
+	OrderID   int64        `json:"order_id"`
+	CourseID  int64        `json:"course_id"`
+	Price     int64        `json:"price"`
+	CreatedAt sql.NullTime `json:"created_at"`
 }
 
 type User struct {
