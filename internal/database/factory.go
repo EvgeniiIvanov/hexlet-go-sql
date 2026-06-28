@@ -72,9 +72,12 @@ func newSQLiteConnection(ctx context.Context, dbPath string) (*Connection, error
 		return nil, fmt.Errorf("sqlite: migrations failed: %w", err)
 	}
 
+	// Wrap with metrics
+	metricsDB := NewMetricsWrapper(sqlDB, nil) // nil = use NoOpMetrics
+
 	return &Connection{
 		DB:      sqlDB,
-		Queries: db.New(sqlDB),
+		Queries: db.New(metricsDB),
 		Driver:  "sqlite",
 	}, nil
 }
@@ -102,8 +105,12 @@ func newPostgresConnection(ctx context.Context, dbURL string) (*Connection, erro
 		return nil, fmt.Errorf("postgres: migrations failed: %w", err)
 	}
 
-	// Wrap the DB to convert SQLite-style placeholders (?) to PostgreSQL-style ($1, $2, etc.)
-	wrappedDB := &postgresDBWrapper{db: sqlDB}
+	// Layer 1: Wrap with metrics
+	metricsDB := NewMetricsWrapper(sqlDB, nil) // nil = use NoOpMetrics
+
+	// Layer 2: Wrap with PostgreSQL placeholder converter (on top of metrics)
+	// This converts SQLite-style placeholders (?) to PostgreSQL-style ($1, $2, etc.)
+	wrappedDB := &postgresDBWrapper{db: metricsDB}
 
 	return &Connection{
 		DB:      sqlDB,
@@ -112,9 +119,18 @@ func newPostgresConnection(ctx context.Context, dbURL string) (*Connection, erro
 	}, nil
 }
 
-// postgresDBWrapper wraps sql.DB and translates SQLite placeholders (?) to PostgreSQL placeholders ($1, $2, etc.)
+// DBExecutor is an interface that defines the methods we need from database connections
+// This allows us to compose wrappers (metrics, placeholder conversion, etc.)
+type DBExecutor interface {
+	QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row
+	ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
+	PrepareContext(ctx context.Context, query string) (*sql.Stmt, error)
+}
+
+// postgresDBWrapper wraps a DBExecutor and translates SQLite placeholders (?) to PostgreSQL placeholders ($1, $2, etc.)
 type postgresDBWrapper struct {
-	db *sql.DB
+	db DBExecutor
 }
 
 func (w *postgresDBWrapper) QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {

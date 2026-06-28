@@ -10,6 +10,7 @@
 - [Database Development](#database-development)
 - [Docker & PostgreSQL](#docker--postgresql)
 - [Code Generation](#code-generation)
+- [Metrics & Observability](#metrics--observability)
 - [Common Tasks](#common-tasks)
 - [Troubleshooting](#troubleshooting)
 
@@ -562,6 +563,222 @@ git diff internal/db/
 git add internal/db/ query/
 git commit -m "feat: add new query"
 ```
+
+## Metrics & Observability
+
+> **TL;DR**: Built-in metrics wrapper ready for Prometheus, StatsD, or custom collectors. Zero overhead by default.
+
+### Overview
+
+The database layer includes a pluggable metrics wrapper that measures all database operations:
+
+```
+Application → MetricsWrapper → PostgresWrapper → sql.DB → Database
+                     ↓
+              MetricsCollector
+```
+
+**By default**: Uses `NoOpMetrics` (zero overhead, no-op)
+**When needed**: Swap in Prometheus, StatsD, or custom implementation
+
+### Architecture
+
+The `MetricsWrapper` implements the same interface as `sql.DB`, so it can wrap any database connection:
+
+```go
+// internal/database/metrics.go
+
+type MetricsCollector interface {
+    ObserveQuery(duration time.Duration, err error, query string)
+}
+
+type MetricsWrapper struct {
+    db      *sql.DB
+    metrics MetricsCollector
+}
+
+func (m *MetricsWrapper) ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
+    start := time.Now()
+    res, err := m.db.ExecContext(ctx, query, args...)
+    m.metrics.ObserveQuery(time.Since(start), err, query)
+    return res, err
+}
+```
+
+### Built-in Implementations
+
+**NoOpMetrics** (default):
+```go
+type NoOpMetrics struct{}
+
+func (m *NoOpMetrics) ObserveQuery(duration time.Duration, err error, query string) {
+    // No-op: zero overhead
+}
+```
+
+### Adding Custom Metrics
+
+**Step 1**: Implement `MetricsCollector` interface
+
+```go
+// internal/database/prometheus_metrics.go (example)
+
+import (
+    "time"
+    "github.com/prometheus/client_golang/prometheus"
+    "github.com/prometheus/client_golang/prometheus/promauto"
+)
+
+var (
+    dbQueryDuration = promauto.NewHistogramVec(
+        prometheus.HistogramOpts{
+            Name: "db_query_duration_seconds",
+            Help: "Database query duration in seconds",
+            Buckets: []float64{.001, .005, .01, .025, .05, .1, .25, .5, 1},
+        },
+        []string{"query_type", "status"},
+    )
+
+    dbQueryTotal = promauto.NewCounterVec(
+        prometheus.CounterOpts{
+            Name: "db_query_total",
+            Help: "Total number of database queries",
+        },
+        []string{"query_type", "status"},
+    )
+)
+
+type PrometheusMetrics struct{}
+
+func (m *PrometheusMetrics) ObserveQuery(duration time.Duration, err error, query string) {
+    queryType := extractQueryType(query)
+    status := "success"
+    if err != nil {
+        status = "error"
+    }
+
+    dbQueryDuration.WithLabelValues(queryType, status).Observe(duration.Seconds())
+    dbQueryTotal.WithLabelValues(queryType, status).Inc()
+}
+
+func extractQueryType(query string) string {
+    query = strings.TrimSpace(strings.ToUpper(query))
+    fields := strings.Fields(query)
+    if len(fields) > 0 {
+        return fields[0] // "SELECT", "INSERT", "UPDATE", "DELETE"
+    }
+    return "UNKNOWN"
+}
+```
+
+**Step 2**: Update factory to use custom metrics
+
+```go
+// internal/database/factory.go
+
+func newSQLiteConnection(ctx context.Context, dbPath string) (*Connection, error) {
+    // ... existing setup code ...
+
+    // Replace NoOpMetrics with your implementation
+    metricsDB := NewMetricsWrapper(sqlDB, &PrometheusMetrics{})
+
+    return &Connection{
+        DB:      sqlDB,
+        Queries: db.New(metricsDB),
+        Driver:  "sqlite",
+    }, nil
+}
+```
+
+**Step 3**: Expose metrics endpoint (in main.go)
+
+```go
+import (
+    "net/http"
+    "github.com/prometheus/client_golang/prometheus/promhttp"
+)
+
+func main() {
+    // Existing code...
+
+    // Expose /metrics endpoint
+    go func() {
+        http.Handle("/metrics", promhttp.Handler())
+        log.Fatal(http.ListenAndServe(":9090", nil))
+    }()
+
+    // Continue with CLI...
+}
+```
+
+### Example: Logging Metrics (for debugging)
+
+```go
+// internal/database/log_metrics.go
+
+import (
+    "log"
+    "strings"
+    "time"
+)
+
+type LogMetrics struct{}
+
+func (m *LogMetrics) ObserveQuery(duration time.Duration, err error, query string) {
+    queryType := extractQueryType(query)
+    status := "✓"
+    if err != nil {
+        status = "✗"
+    }
+
+    log.Printf("[DB] %s %s %v", status, queryType, duration)
+}
+```
+
+### Metrics Data Points
+
+The wrapper collects:
+- **Duration**: How long each query took
+- **Error**: Whether the query succeeded or failed
+- **Query**: The SQL statement (for categorization)
+
+Common metrics to derive:
+- Query duration (histogram/percentiles)
+- Query count (counter)
+- Error rate (counter)
+- Queries per second (rate)
+- Slow queries (threshold-based alerts)
+
+### Performance
+
+**NoOpMetrics overhead**: ~0ns (compiler optimizes away)
+**With metrics**: ~100-500ns per query (negligible for database operations)
+
+### Testing Metrics
+
+```go
+// Example test
+type TestMetrics struct {
+    calls []MetricsCall
+}
+
+func (m *TestMetrics) ObserveQuery(duration time.Duration, err error, query string) {
+    m.calls = append(m.calls, MetricsCall{Duration: duration, Err: err, Query: query})
+}
+
+func TestDatabaseMetrics(t *testing.T) {
+    metrics := &TestMetrics{}
+    db := NewMetricsWrapper(sqlDB, metrics)
+
+    // Execute queries...
+
+    if len(metrics.calls) != expectedCount {
+        t.Errorf("expected %d queries, got %d", expectedCount, len(metrics.calls))
+    }
+}
+```
+
+See `internal/database/metrics_test.go` for complete examples.
 
 ## Common Tasks
 

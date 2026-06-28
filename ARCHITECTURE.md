@@ -223,8 +223,8 @@ Environment Variable (DATABASE_URL)
     ▼               ▼
 SQLite          PostgreSQL
     ↓               ↓
-No wrapper      Placeholder wrapper
-                (? → $1, $2, $3)
+Metrics         Metrics + Placeholder
+wrapper         wrappers (? → $1, $2, $3)
     ↓               ↓
     └───────┬───────┘
             ↓
@@ -234,6 +234,28 @@ No wrapper      Placeholder wrapper
             ↓
        CLI Layer
 ```
+
+### Wrapper Composition
+
+The database connection uses a composable wrapper pattern:
+
+```
+Application Code (sqlc queries)
+        ↓
+MetricsWrapper (optional, measures query duration)
+        ↓
+PostgresWrapper (PostgreSQL only, converts ? to $1, $2, ...)
+        ↓
+sql.DB (standard library)
+        ↓
+Database (SQLite or PostgreSQL)
+```
+
+**Benefits**:
+- Each wrapper has one responsibility
+- Wrappers can be added/removed independently
+- No performance overhead when metrics are disabled (NoOpMetrics)
+- Easy to add new wrappers (logging, tracing, etc.)
 
 ### Database Factory
 
