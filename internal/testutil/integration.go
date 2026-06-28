@@ -8,17 +8,37 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"example.com/go-sql/internal/db"
+
+	_ "github.com/lib/pq"
 	_ "modernc.org/sqlite"
 )
 
-// SetupIntegrationDB creates a real SQLite database file for integration tests
+// SetupIntegrationDB creates a database for integration tests
+// Supports both SQLite and PostgreSQL based on TEST_DATABASE_URL env var
 // Returns the database connection and cleanup function
 func SetupIntegrationDB(t *testing.T) *sql.DB {
 	t.Helper()
 
 	ctx := context.Background()
+
+	// Check if PostgreSQL test database is configured
+	testDBURL := os.Getenv("TEST_DATABASE_URL")
+
+	if testDBURL != "" && (strings.HasPrefix(testDBURL, "postgres://") || strings.HasPrefix(testDBURL, "postgresql://")) {
+		return setupPostgresIntegrationDB(t, ctx, testDBURL)
+	}
+
+	// Default to SQLite
+	return setupSQLiteIntegrationDB(t, ctx)
+}
+
+// setupSQLiteIntegrationDB creates a SQLite database for integration tests
+func setupSQLiteIntegrationDB(t *testing.T, ctx context.Context) *sql.DB {
+	t.Helper()
 
 	// Create temp directory for test database
 	tmpDir := t.TempDir()
@@ -27,13 +47,13 @@ func SetupIntegrationDB(t *testing.T) *sql.DB {
 	// Open real database file (not in-memory)
 	db, err := sql.Open("sqlite", dbPath+"?_foreign_keys=on")
 	if err != nil {
-		t.Fatalf("failed to open integration test database: %v", err)
+		t.Fatalf("failed to open SQLite integration test database: %v", err)
 	}
 
 	// Run migrations
-	if err := runIntegrationMigrations(ctx, db); err != nil {
+	if err := runIntegrationMigrations(ctx, db, "sqlite"); err != nil {
 		db.Close()
-		t.Fatalf("failed to run migrations: %v", err)
+		t.Fatalf("failed to run SQLite migrations: %v", err)
 	}
 
 	// Clean up on test completion
@@ -44,36 +64,112 @@ func SetupIntegrationDB(t *testing.T) *sql.DB {
 	return db
 }
 
-// runIntegrationMigrations executes all migration files for integration tests
-func runIntegrationMigrations(ctx context.Context, db *sql.DB) error {
-	// Try different relative paths to find migrations
-	// Tests might run from different directories
-	possiblePaths := [][]string{
-		{"migrations/001_schema.sql", "migrations/002_add_orders.sql"},
-		{"../../migrations/001_schema.sql", "../../migrations/002_add_orders.sql"},
-		{"../../../migrations/001_schema.sql", "../../../migrations/002_add_orders.sql"},
+// setupPostgresIntegrationDB creates a PostgreSQL database for integration tests
+func setupPostgresIntegrationDB(t *testing.T, ctx context.Context, dbURL string) *sql.DB {
+	t.Helper()
+
+	// Open PostgreSQL connection
+	db, err := sql.Open("postgres", dbURL)
+	if err != nil {
+		t.Fatalf("failed to open PostgreSQL integration test database: %v", err)
 	}
 
-	var migrations []string
-	for _, paths := range possiblePaths {
-		if _, err := os.Stat(paths[0]); err == nil {
-			migrations = paths
+	// Test connection
+	if err := db.PingContext(ctx); err != nil {
+		db.Close()
+		t.Fatalf("failed to ping PostgreSQL: %v (is PostgreSQL running? try: make docker-up)", err)
+	}
+
+	// Clean up database before running tests
+	cleanupPostgresDB(t, ctx, db)
+
+	// Run migrations
+	if err := runIntegrationMigrations(ctx, db, "postgres"); err != nil {
+		db.Close()
+		t.Fatalf("failed to run PostgreSQL migrations: %v", err)
+	}
+
+	// Clean up on test completion
+	t.Cleanup(func() {
+		cleanupPostgresDB(t, ctx, db)
+		db.Close()
+	})
+
+	return db
+}
+
+// cleanupPostgresDB removes all data from PostgreSQL test database
+func cleanupPostgresDB(t *testing.T, ctx context.Context, db *sql.DB) {
+	t.Helper()
+
+	// Drop all tables (in correct order due to foreign keys)
+	tables := []string{
+		"order_items",
+		"enrollments",
+		"orders",
+		"courses",
+		"users",
+	}
+
+	for _, table := range tables {
+		_, err := db.ExecContext(ctx, fmt.Sprintf("DROP TABLE IF EXISTS %s CASCADE", table))
+		if err != nil {
+			t.Logf("warning: failed to drop table %s: %v", table, err)
+		}
+	}
+}
+
+// runIntegrationMigrations executes all migration files for integration tests
+func runIntegrationMigrations(ctx context.Context, db *sql.DB, dbType string) error {
+	// Determine migration paths based on database type
+	var migrationFiles []string
+
+	if dbType == "postgres" {
+		migrationFiles = []string{"001_schema.sql", "002_add_orders.sql"}
+	} else {
+		migrationFiles = []string{"001_schema.sql", "002_add_orders.sql"}
+	}
+
+	// Try different relative paths to find migrations
+	// Tests might run from different directories
+	var basePaths []string
+	if dbType == "postgres" {
+		basePaths = []string{
+			"migrations/postgres/",
+			"../../migrations/postgres/",
+			"../../../migrations/postgres/",
+		}
+	} else {
+		basePaths = []string{
+			"migrations/",
+			"../../migrations/",
+			"../../../migrations/",
+		}
+	}
+
+	var foundBasePath string
+	for _, basePath := range basePaths {
+		testPath := basePath + migrationFiles[0]
+		if _, err := os.Stat(testPath); err == nil {
+			foundBasePath = basePath
 			break
 		}
 	}
 
-	if migrations == nil {
-		return fmt.Errorf("could not find migrations directory")
+	if foundBasePath == "" {
+		return fmt.Errorf("could not find migrations directory for %s", dbType)
 	}
 
-	for _, migration := range migrations {
-		data, err := os.ReadFile(migration)
+	// Execute migrations
+	for _, migration := range migrationFiles {
+		fullPath := foundBasePath + migration
+		data, err := os.ReadFile(fullPath)
 		if err != nil {
-			return fmt.Errorf("read migration %s: %w", migration, err)
+			return fmt.Errorf("read migration %s: %w", fullPath, err)
 		}
 
 		if _, err := db.ExecContext(ctx, string(data)); err != nil {
-			return fmt.Errorf("execute migration %s: %w", migration, err)
+			return fmt.Errorf("execute migration %s: %w", fullPath, err)
 		}
 	}
 
@@ -106,12 +202,12 @@ func WithTx(t *testing.T, db *sql.DB, fn func(tx *sql.Tx)) {
 
 // WithTxContext runs a test function inside a transaction with context
 // Use this when you need to pass context to repository methods
-func WithTxContext(t *testing.T, db *sql.DB, fn func(ctx context.Context, tx *sql.Tx)) {
+func WithTxContext(t *testing.T, sqlDB *sql.DB, fn func(ctx context.Context, tx *sql.Tx)) {
 	t.Helper()
 
 	ctx := context.Background()
 
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := sqlDB.BeginTx(ctx, nil)
 	if err != nil {
 		t.Fatalf("failed to begin transaction: %v", err)
 	}
@@ -123,6 +219,86 @@ func WithTxContext(t *testing.T, db *sql.DB, fn func(ctx context.Context, tx *sq
 	}()
 
 	fn(ctx, tx)
+}
+
+// postgresTxWrapper wraps sql.Tx and translates SQLite placeholders (?) to PostgreSQL placeholders ($1, $2, etc.)
+type postgresTxWrapper struct {
+	tx *sql.Tx
+}
+
+func (w *postgresTxWrapper) QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
+	return w.tx.QueryContext(ctx, convertPlaceholdersTest(query), args...)
+}
+
+func (w *postgresTxWrapper) QueryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row {
+	return w.tx.QueryRowContext(ctx, convertPlaceholdersTest(query), args...)
+}
+
+func (w *postgresTxWrapper) ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
+	return w.tx.ExecContext(ctx, convertPlaceholdersTest(query), args...)
+}
+
+func (w *postgresTxWrapper) PrepareContext(ctx context.Context, query string) (*sql.Stmt, error) {
+	return w.tx.PrepareContext(ctx, convertPlaceholdersTest(query))
+}
+
+// convertPlaceholdersTest converts SQLite-style ? placeholders to PostgreSQL-style $1, $2, etc.
+func convertPlaceholdersTest(query string) string {
+	var result strings.Builder
+	paramIndex := 1
+	inString := false
+	var stringChar byte
+
+	for i := 0; i < len(query); i++ {
+		ch := query[i]
+
+		// Track if we're inside a string literal
+		if ch == '\'' || ch == '"' {
+			if !inString {
+				inString = true
+				stringChar = ch
+			} else if ch == stringChar {
+				// Check if it's escaped
+				if i > 0 && query[i-1] != '\\' {
+					inString = false
+				}
+			}
+		}
+
+		// Only replace ? if we're not inside a string
+		if ch == '?' && !inString {
+			result.WriteString(fmt.Sprintf("$%d", paramIndex))
+			paramIndex++
+		} else {
+			result.WriteByte(ch)
+		}
+	}
+
+	return result.String()
+}
+
+// NewQueries creates a new db.Queries instance that works with both SQLite and PostgreSQL
+// It wraps transactions appropriately for PostgreSQL placeholder conversion
+func NewQueries(tx *sql.Tx) *db.Queries {
+	// Check if we're using PostgreSQL
+	testDBURL := os.Getenv("TEST_DATABASE_URL")
+	if testDBURL != "" && (strings.HasPrefix(testDBURL, "postgres://") || strings.HasPrefix(testDBURL, "postgresql://")) {
+		// Wrap for PostgreSQL
+		wrappedTx := &postgresTxWrapper{tx: tx}
+		return db.New(wrappedTx)
+	}
+
+	// Use raw transaction for SQLite
+	return db.New(tx)
+}
+
+// GetDriverName returns the current test driver name
+func GetDriverName() string {
+	testDBURL := os.Getenv("TEST_DATABASE_URL")
+	if testDBURL != "" && (strings.HasPrefix(testDBURL, "postgres://") || strings.HasPrefix(testDBURL, "postgresql://")) {
+		return "postgres"
+	}
+	return "sqlite"
 }
 
 // IntegrationTestData holds test fixtures for integration tests

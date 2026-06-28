@@ -480,28 +480,27 @@ func printJSON(v interface{}) error {
 }
 
 func main() {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Connect to database
-	dbConn, err := database.Connect(ctx, database.DefaultConfig())
+	// Connect to database (supports both SQLite and PostgreSQL based on env vars)
+	conn, err := database.NewConnection(ctx)
 	if err != nil {
 		log.Fatalf("database connection failed: %v", err)
 	}
-	defer dbConn.Close()
+	defer conn.DB.Close()
 
-	// Initialize schema
-	if err := database.InitSchema(ctx, dbConn); err != nil {
-		log.Fatalf("schema initialization failed: %v", err)
-	}
+	// Log which database we're using
+	log.Printf("Connected to %s database", conn.Driver)
 
 	// Create repository and service
-	repo := repository.New(dbConn)
+	// Note: conn.Queries is already wrapped for PostgreSQL placeholder conversion
+	repo := repository.NewWithDB(conn.DB, conn.Queries, conn.Driver)
 	svc := service.New(repo)
 
 	kongCtx := kong.Parse(&CLI,
 		kong.Name("gosql"),
-		kong.Description("A CLI tool for managing SQLite databases with sqlc"),
+		kong.Description("A CLI tool for managing databases (SQLite or PostgreSQL) with sqlc"),
 		kong.BindTo(ctx, (*context.Context)(nil)),
 		kong.Bind(svc),
 	)

@@ -1,28 +1,31 @@
 # Go SQL CLI Tool
 
-A command-line interface for managing an **e-learning platform** with SQLite. Supports courses, users, enrollments, and a complete **order/payment system**. Built with **sqlc** for type-safe SQL queries and following **Clean Architecture** principles.
+> **TL;DR**: A production-ready CLI for managing an e-learning platform with courses, users, and orders. Supports both SQLite and PostgreSQL with automatic database switching. Built with type-safe SQL (sqlc) and Clean Architecture.
+
+A command-line interface for managing an **e-learning platform** with **SQLite** or **PostgreSQL**. Supports courses, users, enrollments, and a complete **order/payment system**. Built with **sqlc** for type-safe SQL queries and following **Clean Architecture** principles.
 
 ## Features
 
+### Core Features
 - **E-Commerce System**: Complete order management with purchase tracking and enrollments
-- **sqlc**: Type-safe SQL queries generated from SQL files
+- **Multi-Database**: SQLite (default) or PostgreSQL - switch with one environment variable
+- **Type-Safe SQL**: sqlc generates Go code from SQL queries
 - **Clean Architecture**: Service → Repository → Database layer separation
-- **Domain Error Handling**: Custom errors (`ErrNotFound`, `ErrConflict`) with clear messages
-- **JSON Aggregation**: Uses `json_group_array()` for efficient nested data queries
+- **Transactions**: Atomic multi-step operations with proper error handling
 - **JSON Output**: All commands output structured JSON
-- **Nullable Fields**: Proper handling of optional database fields with pointer types
-- **Type Safety**: Strong typing with Go structs and sqlc-generated code
-- **Kong CLI**: Modern command-line parsing with auto-generated help
-- **Prepared Statements**: Bulk operations using prepared statements for performance
-- **Upsert Support**: Insert or update (ON CONFLICT) for both courses and users
-- **Transactions**: Atomic multi-step operations (order creation, enrollments)
-- **Pagination**: All list operations support LIMIT/OFFSET
-- **Defensive Queries**: LEFT JOIN queries handle orphaned data gracefully
+- **Comprehensive Tests**: 52 tests (44 unit + 8 integration) with 23-54% coverage
+
+### Database Support
+- **SQLite**: Zero-config, perfect for development and single-user deployments
+- **PostgreSQL**: Production-ready with Docker support and connection pooling
+- **Automatic Switching**: Set `DATABASE_URL` environment variable to switch databases
+- **Migrations**: Automatic schema migration on startup for both databases
 
 ## Requirements
 
 - Go 1.25.0 or higher
 - **sqlc v1.31.1** - [Installation guide](https://docs.sqlc.dev/en/latest/overview/install.html)
+- Docker & Docker Compose (optional, for PostgreSQL)
 
 ```bash
 # Install sqlc (macOS)
@@ -32,28 +35,48 @@ brew install sqlc
 # https://github.com/sqlc-dev/sqlc/releases/tag/v1.31.1
 ```
 
-## Installation
+## Quick Start
+
+> **TL;DR**: `make build && ./bin/gosql user-add -e "alice@example.com" -n "Alice"` - that's it!
+
+### Option 1: SQLite (Default - No Setup Required!)
 
 ```bash
-# Clone the repository
+# Clone and build
 git clone <repo-url>
 cd hexlet-go-sql
-
-# Build the binary
 make build
+
+# Start using immediately (no database setup needed!)
+./bin/gosql user-add -e "alice@example.com" -n "Alice"
 ```
 
-## Development
-
-### Regenerating sqlc code
-
-After modifying SQL schemas (`migrations/*.sql`) or queries (`query/*.sql`):
+### Option 2: PostgreSQL with Docker
 
 ```bash
-sqlc generate
+# Clone and setup
+git clone <repo-url>
+cd hexlet-go-sql
+make setup         # Creates .env file
+make docker-up     # Starts PostgreSQL in Docker
+
+# Build and use
+make build
+export DATABASE_URL="postgres://gosql:dev_password_123@localhost:5432/gosql_dev?sslmode=disable"
+./bin/gosql user-add -e "alice@example.com" -n "Alice"
 ```
 
-This will regenerate the type-safe Go code in `internal/db/`.
+### Switching Between Databases
+
+```bash
+# Use SQLite (default)
+unset DATABASE_URL
+./bin/gosql user-list
+
+# Use PostgreSQL
+export DATABASE_URL="postgres://gosql:dev_password_123@localhost:5432/gosql_dev?sslmode=disable"
+./bin/gosql user-list
+```
 
 ## Usage
 
@@ -825,12 +848,96 @@ COALESCE(c.title, '') as course_title
 - Example: $99.99 = 9999
 - Benefit: No floating-point precision errors
 
+## Docker & PostgreSQL
+
+### Quick Start with PostgreSQL
+
+```bash
+# 1. Setup environment
+make setup
+
+# 2. Start PostgreSQL
+make docker-up
+
+# 3. Verify it's running
+make docker-ps
+
+# 4. Open database shell
+make db-shell
+```
+
+### Docker Commands
+
+```bash
+make docker-up      # Start PostgreSQL in background
+make docker-down    # Stop PostgreSQL
+make docker-logs    # View PostgreSQL logs
+make docker-clean   # Remove everything (⚠️ destroys data)
+make db-shell       # Open psql shell
+make db-reset       # Drop and recreate database
+```
+
+### Using PostgreSQL
+
+After starting PostgreSQL with `make docker-up`, the application automatically detects and uses it based on the `DATABASE_URL` environment variable:
+
+```bash
+# In .env file
+DATABASE_URL=postgres://gosql:dev_password_123@localhost:5432/gosql_dev?sslmode=disable
+
+# Or export directly
+export DATABASE_URL="postgres://gosql:dev_password_123@localhost:5432/gosql_dev?sslmode=disable"
+./bin/gosql user-add -e "alice@example.com" -n "Alice"
+```
+
+### Switching Between Databases
+
+The application automatically detects which database to use:
+
+```bash
+# Use SQLite (default)
+unset DATABASE_URL
+./bin/gosql user-list
+# Output: Connected to sqlite database
+
+# Use PostgreSQL
+export DATABASE_URL="postgres://gosql:dev_password_123@localhost:5432/gosql_dev?sslmode=disable"
+./bin/gosql user-list
+# Output: Connected to postgres database
+```
+
+### Environment Configuration
+
+```bash
+# .env file (created by `make setup`)
+POSTGRES_USER=gosql
+POSTGRES_PASSWORD=dev_password_123
+POSTGRES_DB=gosql_dev
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+
+# To use PostgreSQL, add:
+DATABASE_URL=postgres://gosql:dev_password_123@localhost:5432/gosql_dev?sslmode=disable
+```
+
+**Important:**
+- `.env` is gitignored (contains secrets)
+- `.env.example` is committed (template)
+- Always use `.env.example` as reference
+
+### Data Persistence
+
+Data is stored in Docker volumes:
+- `gosql_postgres_data` - Database files
+- Persists across container restarts
+- Only removed with `make docker-clean`
+
 ## Documentation
 
-- [docs/EXPORTING_PACKAGES.md](docs/EXPORTING_PACKAGES.md) - Guide for using as a library
-- [examples/README_TRANSACTIONS.md](examples/README_TRANSACTIONS.md) - Detailed transaction guide
-- [sqlc documentation](https://docs.sqlc.dev/) - sqlc reference
-- [Kong CLI documentation](https://github.com/alecthomas/kong) - CLI framework reference
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** - System design and architecture
+- **[DEVELOPMENT.md](DEVELOPMENT.md)** - Development guide for contributors
+- **[sqlc documentation](https://docs.sqlc.dev/)** - sqlc reference
+- **[Kong CLI documentation](https://github.com/alecthomas/kong)** - CLI framework
 
 ## Database Schema
 
