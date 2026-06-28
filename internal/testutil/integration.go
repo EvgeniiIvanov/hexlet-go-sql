@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"example.com/go-sql/internal/db"
 
@@ -23,7 +24,8 @@ import (
 func SetupIntegrationDB(t *testing.T) *sql.DB {
 	t.Helper()
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
 	// Check if PostgreSQL test database is configured
 	testDBURL := os.Getenv("TEST_DATABASE_URL")
@@ -91,7 +93,9 @@ func setupPostgresIntegrationDB(t *testing.T, ctx context.Context, dbURL string)
 
 	// Clean up on test completion
 	t.Cleanup(func() {
-		cleanupPostgresDB(t, ctx, db)
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		cleanupPostgresDB(t, cleanupCtx, db)
 		db.Close()
 	})
 
@@ -181,7 +185,8 @@ func runIntegrationMigrations(ctx context.Context, db *sql.DB, dbType string) er
 func WithTx(t *testing.T, db *sql.DB, fn func(tx *sql.Tx)) {
 	t.Helper()
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
 	// Begin transaction
 	tx, err := db.BeginTx(ctx, nil)
@@ -205,7 +210,8 @@ func WithTx(t *testing.T, db *sql.DB, fn func(tx *sql.Tx)) {
 func WithTxContext(t *testing.T, sqlDB *sql.DB, fn func(ctx context.Context, tx *sql.Tx)) {
 	t.Helper()
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
 	tx, err := sqlDB.BeginTx(ctx, nil)
 	if err != nil {

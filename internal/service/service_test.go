@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"strings"
 	"testing"
+	"time"
 
 	"example.com/go-sql/internal/repository"
 	"example.com/go-sql/internal/testutil"
@@ -14,7 +15,8 @@ func TestService_CreateUser(t *testing.T) {
 	db := testutil.SetupTestDB(t)
 	repo := repository.New(db)
 	svc := New(repo)
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
 	t.Run("create user successfully", func(t *testing.T) {
 		user, err := svc.CreateUser(ctx, "test@example.com",
@@ -65,7 +67,8 @@ func TestService_GetUser(t *testing.T) {
 	db, data := testutil.SetupTestDBWithData(t)
 	repo := repository.New(db)
 	svc := New(repo)
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
 	t.Run("get existing user", func(t *testing.T) {
 		user, err := svc.GetUser(ctx, data.UserID1)
@@ -95,7 +98,8 @@ func TestService_CreateCourse(t *testing.T) {
 	db := testutil.SetupTestDB(t)
 	repo := repository.New(db)
 	svc := New(repo)
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
 	t.Run("create course successfully", func(t *testing.T) {
 		course, err := svc.CreateCourse(ctx, "go-101", "Go Programming", 9999)
@@ -132,7 +136,8 @@ func TestService_ListUsers(t *testing.T) {
 	db, _ := testutil.SetupTestDBWithData(t)
 	repo := repository.New(db)
 	svc := New(repo)
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
 	users, err := svc.ListUsers(ctx, 10, 0)
 	if err != nil {
@@ -152,7 +157,8 @@ func TestService_ListCourses(t *testing.T) {
 	db, _ := testutil.SetupTestDBWithData(t)
 	repo := repository.New(db)
 	svc := New(repo)
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
 	courses, err := svc.ListCourses(ctx, 10, 0)
 	if err != nil {
@@ -167,7 +173,8 @@ func TestService_CreateOrder(t *testing.T) {
 	db, data := testutil.SetupTestDBWithData(t)
 	repo := repository.New(db)
 	svc := New(repo)
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
 	t.Run("create order with single course", func(t *testing.T) {
 		order, err := svc.CreateOrder(ctx, data.UserID1, []int64{data.CourseID1}, "card")
@@ -243,7 +250,8 @@ func TestService_CheckUserOwnsCourse(t *testing.T) {
 	db, data := testutil.SetupTestDBWithData(t)
 	repo := repository.New(db)
 	svc := New(repo)
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
 	t.Run("user does not own course initially", func(t *testing.T) {
 		owns, err := svc.CheckUserOwnsCourse(ctx, data.UserID1, data.CourseID1)
@@ -277,7 +285,8 @@ func TestService_GetUserOrders(t *testing.T) {
 	db, data := testutil.SetupTestDBWithData(t)
 	repo := repository.New(db)
 	svc := New(repo)
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
 	t.Run("get user orders", func(t *testing.T) {
 		// Create two orders
@@ -312,7 +321,8 @@ func TestService_EnrollUser(t *testing.T) {
 	db, data := testutil.SetupTestDBWithData(t)
 	repo := repository.New(db)
 	svc := New(repo)
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
 	t.Run("enroll user in course (free)", func(t *testing.T) {
 		enrollment, err := svc.EnrollUser(ctx, data.UserID1, data.CourseID1)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"testing"
+	"time"
 
 	"example.com/go-sql/internal/testutil"
 )
@@ -11,7 +12,8 @@ import (
 func TestRepository_CreateUser(t *testing.T) {
 	db := testutil.SetupTestDB(t)
 	repo := New(db)
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
 	t.Run("create user with all fields", func(t *testing.T) {
 		user, err := repo.CreateUser(ctx, "test@example.com",
@@ -55,7 +57,8 @@ func TestRepository_CreateUser(t *testing.T) {
 func TestRepository_GetUser(t *testing.T) {
 	db, data := testutil.SetupTestDBWithData(t)
 	repo := New(db)
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
 	t.Run("get existing user", func(t *testing.T) {
 		user, err := repo.GetUser(ctx, data.UserID1)
@@ -84,7 +87,8 @@ func TestRepository_GetUser(t *testing.T) {
 func TestRepository_CreateCourse(t *testing.T) {
 	db := testutil.SetupTestDB(t)
 	repo := New(db)
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
 	t.Run("create course", func(t *testing.T) {
 		course, err := repo.CreateCourse(ctx, "go-101", "Go Programming", 9999)
@@ -120,7 +124,8 @@ func TestRepository_CreateCourse(t *testing.T) {
 func TestRepository_ListUsers(t *testing.T) {
 	db, _ := testutil.SetupTestDBWithData(t)
 	repo := New(db)
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
 	t.Run("list all users", func(t *testing.T) {
 		users, err := repo.ListUsers(ctx, 10, 0)
@@ -154,7 +159,8 @@ func TestRepository_ListUsers(t *testing.T) {
 func TestRepository_CheckUserOwnsCourse(t *testing.T) {
 	db, data := testutil.SetupTestDBWithData(t)
 	repo := New(db)
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
 	t.Run("user does not own course initially", func(t *testing.T) {
 		owns, err := repo.CheckUserOwnsCourse(ctx, data.UserID1, data.CourseID1)
@@ -170,7 +176,8 @@ func TestRepository_CheckUserOwnsCourse(t *testing.T) {
 func TestRepository_CreateOrderWithEnrollments(t *testing.T) {
 	db, data := testutil.SetupTestDBWithData(t)
 	repo := New(db)
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
 	t.Run("create order with single course", func(t *testing.T) {
 		order, err := repo.CreateOrderWithEnrollments(ctx, data.UserID1, []int64{data.CourseID1}, "card")
@@ -250,7 +257,8 @@ func TestRepository_CreateOrderWithEnrollments(t *testing.T) {
 func TestRepository_EnrollUser(t *testing.T) {
 	db, data := testutil.SetupTestDBWithData(t)
 	repo := New(db)
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
 	t.Run("enroll user in course (free enrollment)", func(t *testing.T) {
 		enrollment, err := repo.EnrollUser(ctx, data.UserID1, data.CourseID1)

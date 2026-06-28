@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"os"
 	"testing"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -13,7 +14,8 @@ import (
 func SetupTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
 	// Use in-memory database for tests
 	db, err := sql.Open("sqlite", ":memory:?_foreign_keys=on")
@@ -88,7 +90,9 @@ type TestData struct {
 func SeedTestData(t *testing.T, db *sql.DB) TestData {
 	t.Helper()
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
 	data := TestData{}
 
 	// Insert test users
