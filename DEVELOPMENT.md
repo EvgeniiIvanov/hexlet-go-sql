@@ -16,30 +16,32 @@
 
 ## Getting Started
 
-> **TL;DR**: Install Go 1.25+, sqlc v1.31.1, clone repo, run `make build`.
+> **TL;DR**: Install Go 1.25+, sqlc v1.31.1, goose v3.27.1, clone repo, run `make build`.
 
 ### Prerequisites
 
 ```bash
 # Required
 - Go 1.25.0 or higher
-- sqlc v1.31.1
+- sqlc v1.31.1 (SQL to Go code generator)
+- goose v3.27.1 (Database migration tool)
 
 # Optional (for PostgreSQL development)
 - Docker & Docker Compose
 ```
 
-### Installing sqlc
+### Installing Tools
 
 ```bash
-# macOS
-brew install sqlc
-
-# Linux
+# Install sqlc (standard Go way)
 go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1
 
-# Or download from GitHub releases
-# https://github.com/sqlc-dev/sqlc/releases/tag/v1.31.1
+# Install goose (standard Go way)
+go install github.com/pressly/goose/v3/cmd/goose@v3.27.1
+
+# Verify installations
+sqlc version
+goose -version
 ```
 
 ### Initial Setup
@@ -881,10 +883,11 @@ func main() {
 
 **Problem**: `sqlc: command not found`
 ```bash
-# Install sqlc
-brew install sqlc  # macOS
-# or
+# Install sqlc (standard Go way)
 go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1
+
+# Verify installation
+sqlc version
 ```
 
 **Problem**: sqlc generation fails

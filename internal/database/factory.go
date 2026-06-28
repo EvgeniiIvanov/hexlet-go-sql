@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"example.com/go-sql/internal/db"
+	"example.com/go-sql/internal/migrate"
 
 	_ "github.com/lib/pq"
 	_ "modernc.org/sqlite"
@@ -66,8 +67,8 @@ func newSQLiteConnection(ctx context.Context, dbPath string) (*Connection, error
 		return nil, fmt.Errorf("sqlite: failed to ping: %w", err)
 	}
 
-	// Run migrations
-	if err := runSQLiteMigrations(ctx, sqlDB); err != nil {
+	// Run migrations using goose
+	if err := migrate.Up(sqlDB, "sqlite"); err != nil {
 		sqlDB.Close()
 		return nil, fmt.Errorf("sqlite: migrations failed: %w", err)
 	}
@@ -99,8 +100,8 @@ func newPostgresConnection(ctx context.Context, dbURL string) (*Connection, erro
 		return nil, fmt.Errorf("postgres: failed to ping: %w", err)
 	}
 
-	// Run migrations
-	if err := runPostgresMigrations(ctx, sqlDB); err != nil {
+	// Run migrations using goose
+	if err := migrate.Up(sqlDB, "postgres"); err != nil {
 		sqlDB.Close()
 		return nil, fmt.Errorf("postgres: migrations failed: %w", err)
 	}
@@ -212,40 +213,4 @@ func buildSQLiteConnString(dbPath string) string {
 	}
 
 	return connStr
-}
-
-// runSQLiteMigrations executes SQLite migration files
-func runSQLiteMigrations(ctx context.Context, db *sql.DB) error {
-	migrations := []string{
-		"migrations/001_schema.sql",
-		"migrations/002_add_orders.sql",
-	}
-
-	return executeMigrations(ctx, db, migrations)
-}
-
-// runPostgresMigrations executes PostgreSQL migration files
-func runPostgresMigrations(ctx context.Context, db *sql.DB) error {
-	migrations := []string{
-		"migrations/postgres/001_schema.sql",
-		"migrations/postgres/002_add_orders.sql",
-	}
-
-	return executeMigrations(ctx, db, migrations)
-}
-
-// executeMigrations runs a list of migration files
-func executeMigrations(ctx context.Context, db *sql.DB, migrations []string) error {
-	for _, migration := range migrations {
-		data, err := os.ReadFile(migration)
-		if err != nil {
-			return fmt.Errorf("read %s: %w", migration, err)
-		}
-
-		if _, err := db.ExecContext(ctx, string(data)); err != nil {
-			return fmt.Errorf("execute %s: %w", migration, err)
-		}
-	}
-
-	return nil
 }

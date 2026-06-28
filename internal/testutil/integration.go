@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"example.com/go-sql/internal/db"
+	"example.com/go-sql/internal/migrate"
 
 	_ "github.com/lib/pq"
 	_ "modernc.org/sqlite"
@@ -52,8 +53,8 @@ func setupSQLiteIntegrationDB(t *testing.T, ctx context.Context) *sql.DB {
 		t.Fatalf("failed to open SQLite integration test database: %v", err)
 	}
 
-	// Run migrations
-	if err := runIntegrationMigrations(ctx, db, "sqlite"); err != nil {
+	// Run migrations using goose
+	if err := migrate.Up(db, "sqlite"); err != nil {
 		db.Close()
 		t.Fatalf("failed to run SQLite migrations: %v", err)
 	}
@@ -85,8 +86,8 @@ func setupPostgresIntegrationDB(t *testing.T, ctx context.Context, dbURL string)
 	// Clean up database before running tests
 	cleanupPostgresDB(t, ctx, db)
 
-	// Run migrations
-	if err := runIntegrationMigrations(ctx, db, "postgres"); err != nil {
+	// Run migrations using goose
+	if err := migrate.Up(db, "postgres"); err != nil {
 		db.Close()
 		t.Fatalf("failed to run PostgreSQL migrations: %v", err)
 	}
@@ -108,11 +109,14 @@ func cleanupPostgresDB(t *testing.T, ctx context.Context, db *sql.DB) {
 
 	// Drop all tables (in correct order due to foreign keys)
 	tables := []string{
+		"course_reviews",
+		"lessons",
 		"order_items",
 		"enrollments",
 		"orders",
 		"courses",
 		"users",
+		"goose_db_version", // goose version tracking table
 	}
 
 	for _, table := range tables {
@@ -121,63 +125,6 @@ func cleanupPostgresDB(t *testing.T, ctx context.Context, db *sql.DB) {
 			t.Logf("warning: failed to drop table %s: %v", table, err)
 		}
 	}
-}
-
-// runIntegrationMigrations executes all migration files for integration tests
-func runIntegrationMigrations(ctx context.Context, db *sql.DB, dbType string) error {
-	// Determine migration paths based on database type
-	var migrationFiles []string
-
-	if dbType == "postgres" {
-		migrationFiles = []string{"001_schema.sql", "002_add_orders.sql"}
-	} else {
-		migrationFiles = []string{"001_schema.sql", "002_add_orders.sql"}
-	}
-
-	// Try different relative paths to find migrations
-	// Tests might run from different directories
-	var basePaths []string
-	if dbType == "postgres" {
-		basePaths = []string{
-			"migrations/postgres/",
-			"../../migrations/postgres/",
-			"../../../migrations/postgres/",
-		}
-	} else {
-		basePaths = []string{
-			"migrations/",
-			"../../migrations/",
-			"../../../migrations/",
-		}
-	}
-
-	var foundBasePath string
-	for _, basePath := range basePaths {
-		testPath := basePath + migrationFiles[0]
-		if _, err := os.Stat(testPath); err == nil {
-			foundBasePath = basePath
-			break
-		}
-	}
-
-	if foundBasePath == "" {
-		return fmt.Errorf("could not find migrations directory for %s", dbType)
-	}
-
-	// Execute migrations
-	for _, migration := range migrationFiles {
-		fullPath := foundBasePath + migration
-		data, err := os.ReadFile(fullPath)
-		if err != nil {
-			return fmt.Errorf("read migration %s: %w", fullPath, err)
-		}
-
-		if _, err := db.ExecContext(ctx, string(data)); err != nil {
-			return fmt.Errorf("execute migration %s: %w", fullPath, err)
-		}
-	}
-
-	return nil
 }
 
 // WithTx runs a test function inside a transaction and rolls it back

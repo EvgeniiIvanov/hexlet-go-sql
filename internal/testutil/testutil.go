@@ -3,9 +3,10 @@ package testutil
 import (
 	"context"
 	"database/sql"
-	"os"
 	"testing"
 	"time"
+
+	"example.com/go-sql/internal/migrate"
 
 	_ "modernc.org/sqlite"
 )
@@ -14,17 +15,14 @@ import (
 func SetupTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
 	// Use in-memory database for tests
 	db, err := sql.Open("sqlite", ":memory:?_foreign_keys=on")
 	if err != nil {
 		t.Fatalf("failed to open test database: %v", err)
 	}
 
-	// Run migrations
-	if err := runMigrations(ctx, db); err != nil {
+	// Run migrations using goose
+	if err := migrate.Up(db, "sqlite"); err != nil {
 		db.Close()
 		t.Fatalf("failed to run migrations: %v", err)
 	}
@@ -35,27 +33,6 @@ func SetupTestDB(t *testing.T) *sql.DB {
 	})
 
 	return db
-}
-
-// runMigrations executes all migration files
-func runMigrations(ctx context.Context, db *sql.DB) error {
-	migrations := []string{
-		"../../migrations/001_schema.sql",
-		"../../migrations/002_add_orders.sql",
-	}
-
-	for _, migration := range migrations {
-		data, err := os.ReadFile(migration)
-		if err != nil {
-			return err
-		}
-
-		if _, err := db.ExecContext(ctx, string(data)); err != nil {
-			return err
-		}
-	}
-
-	return nil
 }
 
 // TruncateTable removes all data from a table (for test isolation)

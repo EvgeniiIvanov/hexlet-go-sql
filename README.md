@@ -23,16 +23,21 @@ A command-line interface for managing an **e-learning platform** with **SQLite**
 
 ## Requirements
 
-- Go 1.25.0 or higher
-- **sqlc v1.31.1** - [Installation guide](https://docs.sqlc.dev/en/latest/overview/install.html)
+- **Go 1.25.0 or higher**
+- **sqlc v1.31.1** - SQL to Go code generator
+- **goose v3.27.1** - Database migration tool
 - Docker & Docker Compose (optional, for PostgreSQL)
 
 ```bash
-# Install sqlc (macOS)
-brew install sqlc
+# Install sqlc (standard Go way)
+go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1
 
-# Or download from GitHub releases
-# https://github.com/sqlc-dev/sqlc/releases/tag/v1.31.1
+# Install goose (standard Go way)
+go install github.com/pressly/goose/v3/cmd/goose@v3.27.1
+
+# Verify installations
+sqlc version
+goose -version
 ```
 
 ## Quick Start
@@ -938,6 +943,112 @@ Data is stored in Docker volumes:
 - **[DEVELOPMENT.md](DEVELOPMENT.md)** - Development guide for contributors
 - **[sqlc documentation](https://docs.sqlc.dev/)** - sqlc reference
 - **[Kong CLI documentation](https://github.com/alecthomas/kong)** - CLI framework
+
+## Database Migrations
+
+> **TL;DR**: Migrations run automatically. Use `goose` CLI for manual operations. New tables: `lessons` and `course_reviews`.
+
+### Migration System
+
+This project uses [goose](https://github.com/pressly/goose) for database migrations with automatic migration on startup.
+
+**Automatic Migrations:**
+- Migrations run automatically when the application starts
+- Separate migration files for SQLite and PostgreSQL
+- Version tracked in `goose_db_version` table
+
+**Migration Files:**
+```
+internal/migrate/migrations/
+├── 001_initial_schema.sql        # Core tables (users, courses, orders, etc.)
+├── 002_add_lessons_table.sql     # Course lessons
+└── 003_add_reviews_table.sql     # Course reviews
+
+internal/migrate/migrations/postgres/
+├── 001_initial_schema.sql
+├── 002_add_lessons_table.sql
+└── 003_add_reviews_table.sql
+```
+
+### Manual Migration Commands
+
+Install goose CLI (if not already installed):
+```bash
+go install github.com/pressly/goose/v3/cmd/goose@v3.27.1
+```
+
+Run migrations manually:
+```bash
+# SQLite
+cd internal/migrate
+goose -dir migrations sqlite /path/to/data.db up
+
+# PostgreSQL
+goose -dir migrations/postgres postgres "user=gosql password=dev_password_123 dbname=gosql_dev sslmode=disable" up
+```
+
+Check migration status:
+```bash
+# SQLite
+goose -dir migrations sqlite /path/to/data.db status
+
+# PostgreSQL
+goose -dir migrations/postgres postgres "connection_string" status
+```
+
+Rollback last migration:
+```bash
+# SQLite
+goose -dir migrations sqlite /path/to/data.db down
+
+# PostgreSQL
+goose -dir migrations/postgres postgres "connection_string" down
+```
+
+### Creating New Migrations
+
+```bash
+cd internal/migrate
+
+# Create SQLite migration
+goose -dir migrations create add_new_table sql
+
+# Create PostgreSQL migration (adapt SQL syntax)
+goose -dir migrations/postgres create add_new_table sql
+```
+
+**Migration Template:**
+```sql
+-- +goose Up
+CREATE TABLE example (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,  -- SQLite
+    -- id SERIAL PRIMARY KEY,              -- PostgreSQL
+    name TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP  -- SQLite
+    -- created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP  -- PostgreSQL
+);
+
+-- +goose Down
+DROP TABLE IF EXISTS example;
+```
+
+**Key Differences:**
+| Feature | SQLite | PostgreSQL |
+|---------|--------|------------|
+| Auto-increment | `INTEGER PRIMARY KEY AUTOINCREMENT` | `SERIAL PRIMARY KEY` |
+| Timestamp | `DATETIME` | `TIMESTAMP` |
+| Foreign keys | Inline or separate | Inline with `REFERENCES` |
+
+### New Tables (v3 Migrations)
+
+**lessons** - Course lessons (1-to-many with courses)
+- `id`, `course_id` (FK to courses), `title`, `description`, `created_at`
+- Example: "Introduction to Go", "Variables and Types"
+
+**course_reviews** - Course reviews and ratings
+- `id`, `course_id` (FK to courses), `user_id` (FK to users), `rating` (1-5), `comment`, `created_at`
+- Rating constraint: `CHECK (rating BETWEEN 1 AND 5)`
+- Example: 5 stars, "Great course!"
 
 ## Database Schema
 
