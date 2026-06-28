@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,16 +13,19 @@ import (
 	"github.com/alecthomas/kong"
 
 	"example.com/go-sql/internal/database"
-	"example.com/go-sql/internal/storage"
+	"example.com/go-sql/internal/db"
+	"example.com/go-sql/internal/repository"
+	"example.com/go-sql/internal/service"
 )
 
 var CLI struct {
 	DBPath string `help:"Path to SQLite database" default:"data.db"`
 
-	CourseAdd        CourseAddCmd        `cmd:"" help:"Add a new course"`
-	CourseList       CourseListCmd       `cmd:"" help:"List courses"`
-	CourseFind       CourseFindCmd       `cmd:"" help:"Find courses by IDs"`
-	CourseBulkUpsert CourseBulkUpsertCmd `cmd:"" help:"Bulk upsert courses from JSON file or stdin"`
+	CourseAdd             CourseAddCmd             `cmd:"" help:"Add a new course"`
+	CourseList            CourseListCmd            `cmd:"" help:"List courses"`
+	CourseFind            CourseFindCmd            `cmd:"" help:"Find courses by IDs"`
+	CourseWithEnrollments CourseWithEnrollmentsCmd `cmd:"" help:"Get a course with all its enrollments"`
+	CourseBulkUpsert      CourseBulkUpsertCmd      `cmd:"" help:"Bulk upsert courses from JSON file or stdin"`
 
 	UserAdd        UserAddCmd        `cmd:"" help:"Add a new user"`
 	UserList       UserListCmd       `cmd:"" help:"List all users"`
@@ -34,67 +38,86 @@ var CLI struct {
 	EnrollmentList     EnrollmentListCmd     `cmd:"" help:"List all enrollments"`
 	EnrollmentByUser   EnrollmentByUserCmd   `cmd:"" help:"List enrollments for a specific user"`
 	EnrollmentByCourse EnrollmentByCourseCmd `cmd:"" help:"List enrollments for a specific course"`
+
+	OrderCreate       OrderCreateCmd       `cmd:"" help:"Create an order and enroll user in courses"`
+	OrderGet          OrderGetCmd          `cmd:"" help:"Get order details with items"`
+	OrderList         OrderListCmd         `cmd:"" help:"List all orders"`
+	OrdersByUser      OrdersByUserCmd      `cmd:"" help:"Get user's order history"`
+	OrderRefund       OrderRefundCmd       `cmd:"" help:"Refund an order"`
+	CheckCourseAccess CheckCourseAccessCmd `cmd:"" help:"Check if user owns a course"`
 }
+
+// Course commands
 
 type CourseAddCmd struct {
 	Slug  string `short:"s" help:"Course slug (unique identifier)" required:""`
 	Title string `short:"t" help:"Course title" required:""`
-	Price int    `short:"p" help:"Course price in USD" default:"0"`
+	Price int64  `short:"p" help:"Course price in USD" default:"0"`
 }
 
-func (cmd *CourseAddCmd) Run(ctx context.Context, repo *storage.CourseRepository) error {
-	dto := storage.CreateCourseDTO{
-		Slug:  cmd.Slug,
-		Title: cmd.Title,
-		Price: cmd.Price,
-	}
-
-	course, err := repo.Create(ctx, dto)
+func (cmd *CourseAddCmd) Run(ctx context.Context, svc *service.Service) error {
+	course, err := svc.CreateCourse(ctx, cmd.Slug, cmd.Title, cmd.Price)
 	if err != nil {
-		return fmt.Errorf("create course: %w", err)
+		return err
 	}
 
 	return printJSON(course)
 }
 
 type CourseListCmd struct {
-	Limit  int    `short:"l" help:"Number of courses to return" default:"10"`
-	Offset int    `short:"o" help:"Offset for pagination" default:"0"`
-	Order  string `short:"r" help:"Order by field (id, slug, title, price)" default:"id" enum:"id,slug,title,price"`
+	Limit  int64 `short:"l" help:"Number of courses to return" default:"10"`
+	Offset int64 `short:"o" help:"Offset for pagination" default:"0"`
 }
 
-func (cmd *CourseListCmd) Run(ctx context.Context, repo *storage.CourseRepository) error {
-	courses, err := repo.List(ctx, cmd.Limit, cmd.Offset, cmd.Order)
+func (cmd *CourseListCmd) Run(ctx context.Context, svc *service.Service) error {
+	courses, err := svc.ListCourses(ctx, cmd.Limit, cmd.Offset)
 	if err != nil {
-		return fmt.Errorf("list courses: %w", err)
+		return err
 	}
 
 	return printJSON(courses)
 }
 
 type CourseFindCmd struct {
-	IDs []int64 `arg:"" name:"ids" help:"Course IDs to find" required:""`
+	IDs []int64 `arg:"" help:"Course IDs to find"`
 }
 
-func (cmd *CourseFindCmd) Run(ctx context.Context, repo *storage.CourseRepository) error {
-	courses, err := repo.FindByIDs(ctx, cmd.IDs)
+func (cmd *CourseFindCmd) Run(ctx context.Context, svc *service.Service) error {
+	courses, err := svc.FindCoursesByIDs(ctx, cmd.IDs)
 	if err != nil {
-		return fmt.Errorf("find courses: %w", err)
+		return err
 	}
 
 	return printJSON(courses)
+}
+
+type CourseWithEnrollmentsCmd struct {
+	ID int64 `arg:"" help:"Course ID"`
+}
+
+func (cmd *CourseWithEnrollmentsCmd) Run(ctx context.Context, svc *service.Service) error {
+	course, err := svc.GetCourseWithEnrollments(ctx, cmd.ID)
+	if err != nil {
+		return err
+	}
+
+	return printJSON(course)
 }
 
 type CourseBulkUpsertCmd struct {
 	File string `short:"f" help:"JSON file with courses array (use '-' for stdin)" default:"-"`
 }
 
-func (cmd *CourseBulkUpsertCmd) Run(ctx context.Context, repo *storage.CourseRepository) error {
+type CourseDTO struct {
+	Slug  string `json:"slug"`
+	Title string `json:"title"`
+	Price int64  `json:"price"`
+}
+
+func (cmd *CourseBulkUpsertCmd) Run(ctx context.Context, svc *service.Service) error {
 	start := time.Now()
 
-	var dtos []storage.CreateCourseDTO
-
-	// Read from file or stdin
+	var dtos []CourseDTO
 	var data []byte
 	var err error
 
@@ -110,19 +133,25 @@ func (cmd *CourseBulkUpsertCmd) Run(ctx context.Context, repo *storage.CourseRep
 		}
 	}
 
-	// Parse JSON
 	if err := json.Unmarshal(data, &dtos); err != nil {
 		return fmt.Errorf("parse json: %w", err)
 	}
 
-	// Perform bulk upsert
+	params := make([]db.UpsertCourseParams, len(dtos))
+	for i, dto := range dtos {
+		params[i] = db.UpsertCourseParams{
+			Slug:  dto.Slug,
+			Title: dto.Title,
+			Price: dto.Price,
+		}
+	}
+
 	operationStart := time.Now()
-	if err := repo.BulkUpsert(ctx, dtos); err != nil {
+	if err := svc.BulkUpsertCourses(ctx, params); err != nil {
 		return fmt.Errorf("bulk upsert: %w", err)
 	}
 	operationDuration := time.Since(operationStart)
 
-	// Return success message with timing
 	result := map[string]interface{}{
 		"success":        true,
 		"count":          len(dtos),
@@ -138,45 +167,52 @@ func (cmd *CourseBulkUpsertCmd) Run(ctx context.Context, repo *storage.CourseRep
 // User commands
 
 type UserAddCmd struct {
-	Email string  `short:"e" help:"User email (required)" required:""`
-	Name  *string `short:"n" help:"User name (optional)"`
-	Age   *int    `short:"a" help:"User age (optional)"`
+	Email string `short:"e" help:"User email" required:""`
+	Name  string `short:"n" help:"User name (optional)"`
+	Age   int64  `short:"a" help:"User age (optional)"`
 }
 
-func (cmd *UserAddCmd) Run(ctx context.Context, repo *storage.UserRepository) error {
-	dto := storage.CreateUserDTO{
-		Email: cmd.Email,
-		Name:  cmd.Name,
-		Age:   cmd.Age,
+func (cmd *UserAddCmd) Run(ctx context.Context, svc *service.Service) error {
+	var name sql.NullString
+	var age sql.NullInt64
+
+	if cmd.Name != "" {
+		name = sql.NullString{String: cmd.Name, Valid: true}
+	}
+	if cmd.Age > 0 {
+		age = sql.NullInt64{Int64: cmd.Age, Valid: true}
 	}
 
-	user, err := repo.Create(ctx, dto)
+	user, err := svc.CreateUser(ctx, cmd.Email, name, age)
 	if err != nil {
-		return fmt.Errorf("create user: %w", err)
+		return err
 	}
 
 	return printJSON(user)
 }
 
-type UserListCmd struct{}
+type UserListCmd struct {
+	Limit  int64 `short:"l" help:"Number of users to return" default:"10"`
+	Offset int64 `short:"o" help:"Offset for pagination" default:"0"`
+}
 
-func (cmd *UserListCmd) Run(ctx context.Context, repo *storage.UserRepository) error {
-	users, err := repo.List(ctx)
+func (cmd *UserListCmd) Run(ctx context.Context, svc *service.Service) error {
+	users, err := svc.ListUsers(ctx, cmd.Limit, cmd.Offset)
 	if err != nil {
-		return fmt.Errorf("list users: %w", err)
+		return err
 	}
 
 	return printJSON(users)
 }
 
 type UserGetCmd struct {
-	ID int64 `arg:"" help:"User ID to retrieve" required:""`
+	ID int64 `arg:"" help:"User ID"`
 }
 
-func (cmd *UserGetCmd) Run(ctx context.Context, repo *storage.UserRepository) error {
-	user, err := repo.Get(ctx, cmd.ID)
+func (cmd *UserGetCmd) Run(ctx context.Context, svc *service.Service) error {
+	user, err := svc.GetUser(ctx, cmd.ID)
 	if err != nil {
-		return fmt.Errorf("get user: %w", err)
+		return err
 	}
 
 	return printJSON(user)
@@ -186,42 +222,54 @@ type UserBulkUpsertCmd struct {
 	File string `short:"f" help:"JSON file with users array (use '-' for stdin)" default:"-"`
 }
 
-func (cmd *UserBulkUpsertCmd) Run(ctx context.Context, repo *storage.UserRepository) error {
+type UserDTO struct {
+	Email string  `json:"email"`
+	Name  *string `json:"name,omitempty"`
+	Age   *int64  `json:"age,omitempty"`
+}
+
+func (cmd *UserBulkUpsertCmd) Run(ctx context.Context, svc *service.Service) error {
 	start := time.Now()
 
-	var dtos []storage.CreateUserDTO
-
-	// Read from file or stdin
+	var dtos []UserDTO
 	var data []byte
 	var err error
 
 	if cmd.File == "-" {
-		// Read from stdin
 		data, err = io.ReadAll(os.Stdin)
 		if err != nil {
 			return fmt.Errorf("read stdin: %w", err)
 		}
 	} else {
-		// Read from file
 		data, err = os.ReadFile(cmd.File)
 		if err != nil {
 			return fmt.Errorf("read file: %w", err)
 		}
 	}
 
-	// Parse JSON
 	if err := json.Unmarshal(data, &dtos); err != nil {
 		return fmt.Errorf("parse json: %w", err)
 	}
 
-	// Perform bulk upsert
+	params := make([]db.UpsertUserParams, len(dtos))
+	for i, dto := range dtos {
+		params[i] = db.UpsertUserParams{
+			Email: dto.Email,
+		}
+		if dto.Name != nil {
+			params[i].Name = sql.NullString{String: *dto.Name, Valid: true}
+		}
+		if dto.Age != nil {
+			params[i].Age = sql.NullInt64{Int64: *dto.Age, Valid: true}
+		}
+	}
+
 	operationStart := time.Now()
-	if err := repo.BulkUpsert(ctx, dtos); err != nil {
+	if err := svc.BulkUpsertUsers(ctx, params); err != nil {
 		return fmt.Errorf("bulk upsert: %w", err)
 	}
 	operationDuration := time.Since(operationStart)
 
-	// Return success message with timing
 	result := map[string]interface{}{
 		"success":        true,
 		"count":          len(dtos),
@@ -241,10 +289,10 @@ type EnrollmentCreateCmd struct {
 	CourseID int64 `short:"c" help:"Course ID" required:""`
 }
 
-func (cmd *EnrollmentCreateCmd) Run(ctx context.Context, repo *storage.EnrollmentRepository) error {
-	enrollment, err := repo.EnrollUser(ctx, cmd.UserID, cmd.CourseID)
+func (cmd *EnrollmentCreateCmd) Run(ctx context.Context, svc *service.Service) error {
+	enrollment, err := svc.EnrollUser(ctx, cmd.UserID, cmd.CourseID)
 	if err != nil {
-		return fmt.Errorf("enroll user: %w", err)
+		return err
 	}
 
 	return printJSON(enrollment)
@@ -255,9 +303,9 @@ type EnrollmentCancelCmd struct {
 	CourseID int64 `short:"c" help:"Course ID" required:""`
 }
 
-func (cmd *EnrollmentCancelCmd) Run(ctx context.Context, repo *storage.EnrollmentRepository) error {
-	if err := repo.UnenrollUser(ctx, cmd.UserID, cmd.CourseID); err != nil {
-		return fmt.Errorf("cancel enrollment: %w", err)
+func (cmd *EnrollmentCancelCmd) Run(ctx context.Context, svc *service.Service) error {
+	if err := svc.CancelEnrollment(ctx, cmd.UserID, cmd.CourseID); err != nil {
+		return err
 	}
 
 	result := map[string]interface{}{
@@ -273,9 +321,9 @@ type EnrollmentCompleteCmd struct {
 	CourseID int64 `short:"c" help:"Course ID" required:""`
 }
 
-func (cmd *EnrollmentCompleteCmd) Run(ctx context.Context, repo *storage.EnrollmentRepository) error {
-	if err := repo.CompleteEnrollment(ctx, cmd.UserID, cmd.CourseID); err != nil {
-		return fmt.Errorf("complete enrollment: %w", err)
+func (cmd *EnrollmentCompleteCmd) Run(ctx context.Context, svc *service.Service) error {
+	if err := svc.CompleteEnrollment(ctx, cmd.UserID, cmd.CourseID); err != nil {
+		return err
 	}
 
 	result := map[string]interface{}{
@@ -286,12 +334,15 @@ func (cmd *EnrollmentCompleteCmd) Run(ctx context.Context, repo *storage.Enrollm
 	return printJSON(result)
 }
 
-type EnrollmentListCmd struct{}
+type EnrollmentListCmd struct {
+	Limit  int64 `short:"l" help:"Number of enrollments to return" default:"10"`
+	Offset int64 `short:"o" help:"Offset for pagination" default:"0"`
+}
 
-func (cmd *EnrollmentListCmd) Run(ctx context.Context, repo *storage.EnrollmentRepository) error {
-	enrollments, err := repo.ListAll(ctx)
+func (cmd *EnrollmentListCmd) Run(ctx context.Context, svc *service.Service) error {
+	enrollments, err := svc.ListEnrollments(ctx, cmd.Limit, cmd.Offset)
 	if err != nil {
-		return fmt.Errorf("list enrollments: %w", err)
+		return err
 	}
 
 	return printJSON(enrollments)
@@ -301,10 +352,10 @@ type EnrollmentByUserCmd struct {
 	UserID int64 `short:"u" help:"User ID" required:""`
 }
 
-func (cmd *EnrollmentByUserCmd) Run(ctx context.Context, repo *storage.EnrollmentRepository) error {
-	enrollments, err := repo.GetUserEnrollments(ctx, cmd.UserID)
+func (cmd *EnrollmentByUserCmd) Run(ctx context.Context, svc *service.Service) error {
+	enrollments, err := svc.ListEnrollmentsByUser(ctx, cmd.UserID)
 	if err != nil {
-		return fmt.Errorf("get user enrollments: %w", err)
+		return err
 	}
 
 	return printJSON(enrollments)
@@ -314,13 +365,107 @@ type EnrollmentByCourseCmd struct {
 	CourseID int64 `short:"c" help:"Course ID" required:""`
 }
 
-func (cmd *EnrollmentByCourseCmd) Run(ctx context.Context, repo *storage.EnrollmentRepository) error {
-	enrollments, err := repo.GetCourseEnrollments(ctx, cmd.CourseID)
+func (cmd *EnrollmentByCourseCmd) Run(ctx context.Context, svc *service.Service) error {
+	enrollments, err := svc.ListEnrollmentsByCourse(ctx, cmd.CourseID)
 	if err != nil {
-		return fmt.Errorf("get course enrollments: %w", err)
+		return err
 	}
 
 	return printJSON(enrollments)
+}
+
+// Order commands
+
+type OrderCreateCmd struct {
+	UserID        int64   `short:"u" help:"User ID" required:""`
+	CourseIDs     []int64 `short:"c" help:"Course IDs to purchase" required:""`
+	PaymentMethod string  `short:"p" help:"Payment method (card, paypal, etc.)" default:"card"`
+}
+
+func (cmd *OrderCreateCmd) Run(ctx context.Context, svc *service.Service) error {
+	order, err := svc.CreateOrder(ctx, cmd.UserID, cmd.CourseIDs, cmd.PaymentMethod)
+	if err != nil {
+		return err
+	}
+
+	return printJSON(order)
+}
+
+type OrderGetCmd struct {
+	ID int64 `arg:"" help:"Order ID"`
+}
+
+func (cmd *OrderGetCmd) Run(ctx context.Context, svc *service.Service) error {
+	order, err := svc.GetOrderWithItems(ctx, cmd.ID)
+	if err != nil {
+		return err
+	}
+
+	return printJSON(order)
+}
+
+type OrderListCmd struct {
+	Limit  int64 `short:"l" help:"Number of orders to return" default:"10"`
+	Offset int64 `short:"o" help:"Offset for pagination" default:"0"`
+}
+
+func (cmd *OrderListCmd) Run(ctx context.Context, svc *service.Service) error {
+	orders, err := svc.ListOrders(ctx, cmd.Limit, cmd.Offset)
+	if err != nil {
+		return err
+	}
+
+	return printJSON(orders)
+}
+
+type OrdersByUserCmd struct {
+	UserID int64 `short:"u" help:"User ID" required:""`
+}
+
+func (cmd *OrdersByUserCmd) Run(ctx context.Context, svc *service.Service) error {
+	orders, err := svc.GetUserOrders(ctx, cmd.UserID)
+	if err != nil {
+		return err
+	}
+
+	return printJSON(orders)
+}
+
+type OrderRefundCmd struct {
+	ID int64 `arg:"" help:"Order ID to refund"`
+}
+
+func (cmd *OrderRefundCmd) Run(ctx context.Context, svc *service.Service) error {
+	if err := svc.RefundOrder(ctx, cmd.ID); err != nil {
+		return err
+	}
+
+	result := map[string]interface{}{
+		"success": true,
+		"message": fmt.Sprintf("Order %d has been refunded", cmd.ID),
+	}
+
+	return printJSON(result)
+}
+
+type CheckCourseAccessCmd struct {
+	UserID   int64 `short:"u" help:"User ID" required:""`
+	CourseID int64 `short:"c" help:"Course ID" required:""`
+}
+
+func (cmd *CheckCourseAccessCmd) Run(ctx context.Context, svc *service.Service) error {
+	owns, err := svc.CheckUserOwnsCourse(ctx, cmd.UserID, cmd.CourseID)
+	if err != nil {
+		return err
+	}
+
+	result := map[string]interface{}{
+		"user_id":    cmd.UserID,
+		"course_id":  cmd.CourseID,
+		"has_access": owns,
+	}
+
+	return printJSON(result)
 }
 
 // Helper functions
@@ -335,33 +480,29 @@ func printJSON(v interface{}) error {
 }
 
 func main() {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Connect to database
-	db, err := database.Connect(ctx, database.DefaultConfig())
+	// Connect to database (supports both SQLite and PostgreSQL based on env vars)
+	conn, err := database.NewConnection(ctx)
 	if err != nil {
 		log.Fatalf("database connection failed: %v", err)
 	}
-	defer db.Close()
+	defer conn.DB.Close()
 
-	// Initialize schema
-	if err := database.InitSchema(ctx, db); err != nil {
-		log.Fatalf("schema initialization failed: %v", err)
-	}
+	// Log which database we're using
+	log.Printf("Connected to %s database", conn.Driver)
 
-	// Create repositories
-	courseRepo := storage.NewCourseRepository(db)
-	userRepo := storage.NewUserRepository(db)
-	enrollmentRepo := storage.NewEnrollmentRepository(db)
+	// Create repository and service
+	// Note: conn.Queries is already wrapped for PostgreSQL placeholder conversion
+	repo := repository.NewWithDB(conn.DB, conn.Queries, conn.Driver)
+	svc := service.New(repo)
 
 	kongCtx := kong.Parse(&CLI,
 		kong.Name("gosql"),
-		kong.Description("A CLI tool for managing SQLite databases"),
+		kong.Description("A CLI tool for managing databases (SQLite or PostgreSQL) with sqlc"),
 		kong.BindTo(ctx, (*context.Context)(nil)),
-		kong.Bind(courseRepo),
-		kong.Bind(userRepo),
-		kong.Bind(enrollmentRepo),
+		kong.Bind(svc),
 	)
 
 	if err := kongCtx.Run(); err != nil {

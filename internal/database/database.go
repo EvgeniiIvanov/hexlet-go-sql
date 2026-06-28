@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -46,37 +47,21 @@ func Connect(ctx context.Context, cfg Config) (*sql.DB, error) {
 	return db, nil
 }
 
-// InitSchema initializes the database schema
+// InitSchema initializes the database schema by running migrations
 func InitSchema(ctx context.Context, db *sql.DB) error {
-	schemas := []string{
-		`CREATE TABLE IF NOT EXISTS courses (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			slug TEXT NOT NULL UNIQUE,
-			title TEXT NOT NULL,
-			price INTEGER NOT NULL DEFAULT 0
-		)`,
-		`CREATE TABLE IF NOT EXISTS users (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			email TEXT NOT NULL UNIQUE,
-			name TEXT,
-			age INTEGER,
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-		)`,
-		`CREATE TABLE IF NOT EXISTS enrollments (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			user_id INTEGER NOT NULL,
-			course_id INTEGER NOT NULL,
-			enrolled_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			status TEXT NOT NULL DEFAULT 'active',
-			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-			FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
-			UNIQUE(user_id, course_id)
-		)`,
+	migrations := []string{
+		"migrations/001_schema.sql",
+		"migrations/002_add_orders.sql",
 	}
 
-	for _, schema := range schemas {
-		if _, err := db.ExecContext(ctx, schema); err != nil {
-			return fmt.Errorf("create table: %w", err)
+	for _, migration := range migrations {
+		data, err := os.ReadFile(migration)
+		if err != nil {
+			return fmt.Errorf("read migration file %s: %w", migration, err)
+		}
+
+		if _, err := db.ExecContext(ctx, string(data)); err != nil {
+			return fmt.Errorf("execute migration %s: %w", migration, err)
 		}
 	}
 

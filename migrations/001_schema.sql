@@ -1,0 +1,30 @@
+-- Courses table
+CREATE TABLE IF NOT EXISTS courses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    slug TEXT NOT NULL UNIQUE,
+    title TEXT NOT NULL,
+    price INTEGER NOT NULL DEFAULT 0
+);
+
+-- Users table
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT NOT NULL UNIQUE,
+    name TEXT,
+    age INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Enrollments table
+CREATE TABLE IF NOT EXISTS enrollments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    course_id INTEGER NOT NULL,
+    enrolled_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    status TEXT NOT NULL DEFAULT 'active',
+    order_id INTEGER,  -- Reference to orders table (NULL for free enrollments)
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
+    FOREIGN KEY (order_id) REFERENCES orders(id),
+    UNIQUE(user_id, course_id)
+);
